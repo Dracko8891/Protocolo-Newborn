@@ -1,0 +1,6 @@
+{
+  "name": "Protocolo Newborn",
+  "description": "Survival horror 3D em primeira pessoa no Complexo Vanguard-7 com interface LCARS e estúdio multimodal em Português (BR).",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
