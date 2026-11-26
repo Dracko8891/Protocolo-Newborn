@@ -1,81 +1,88 @@
 package com.example
 
+import android.annotation.SuppressLint
+import android.content.pm.ActivityInfo
+import android.os.Build
 import android.os.Bundle
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowInsetsController
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
+import androidx.activity.addCallback
 
 class MainActivity : ComponentActivity() {
-  private lateinit var gameView: WebView
+    private lateinit var gameView: WebView
 
-  @Suppress("DEPRECATION")
-  private fun hideSystemUi() {
-    window.decorView.systemUiVisibility = (
-      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-        or View.SYSTEM_UI_FLAG_FULLSCREEN
-        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-    )
-  }
+    @SuppressLint("SetJavaScriptEnabled")
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
-  override fun onCreate(savedInstanceState: Bundle?) {
-    super.onCreate(savedInstanceState)
-    hideSystemUi()
-
-    gameView = WebView(this).apply {
-      settings.javaScriptEnabled = true
-      settings.domStorageEnabled = true
-      settings.databaseEnabled = true
-      settings.allowFileAccess = true
-      settings.allowContentAccess = true
-      settings.mediaPlaybackRequiresUserGesture = false
-      settings.setSupportZoom(false)
-      settings.builtInZoomControls = false
-      settings.displayZoomControls = false
-      webChromeClient = WebChromeClient()
-      webViewClient = WebViewClient()
-      setBackgroundColor(android.graphics.Color.BLACK)
-    }
-    setContentView(gameView)
-
-    if (savedInstanceState == null) {
-      gameView.loadUrl("file:///android_asset/web/index.html")
-    } else {
-      gameView.restoreState(savedInstanceState)
-    }
-
-    onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-      override fun handleOnBackPressed() {
-        // O jogo controla a navegação; voltar não deve fechar a sessão por acidente.
-        if (gameView.canGoBack()) gameView.goBack() else {
-          isEnabled = false
-          onBackPressedDispatcher.onBackPressed()
+        gameView = WebView(this).apply {
+            setBackgroundColor(android.graphics.Color.rgb(7, 9, 13))
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.mediaPlaybackRequiresUserGesture = false
+            settings.allowFileAccess = true
+            settings.allowContentAccess = true
+            settings.setSupportZoom(false)
+            settings.builtInZoomControls = false
+            settings.displayZoomControls = false
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            webViewClient = WebViewClient()
+            webChromeClient = WebChromeClient()
+            isFocusable = true
+            isFocusableInTouchMode = true
         }
-      }
-    })
-  }
 
-  override fun onSaveInstanceState(outState: Bundle) {
-    gameView.saveState(outState)
-    super.onSaveInstanceState(outState)
-  }
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        setContentView(gameView)
+        hideSystemUi()
+        gameView.loadUrl("file:///android_asset/game/index.html")
 
-  @Suppress("DEPRECATION")
-  override fun onWindowFocusChanged(hasFocus: Boolean) {
-    super.onWindowFocusChanged(hasFocus)
-    if (hasFocus) hideSystemUi()
-  }
-
-  override fun onDestroy() {
-    if (::gameView.isInitialized) {
-      gameView.stopLoading()
-      gameView.destroy()
+        onBackPressedDispatcher.addCallback(this) {
+            gameView.evaluateJavascript(
+                "window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',bubbles:true}))",
+                null
+            )
+        }
     }
-    super.onDestroy()
-  }
+
+    @Suppress("DEPRECATION")
+    private fun hideSystemUi() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.insetsController?.let { controller ->
+                controller.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                controller.systemBarsBehavior =
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            }
+        } else {
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                    View.SYSTEM_UI_FLAG_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                    View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                )
+        }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) hideSystemUi()
+    }
+
+    override fun onDestroy() {
+        if (::gameView.isInitialized) {
+            gameView.loadUrl("about:blank")
+            gameView.stopLoading()
+            gameView.destroy()
+        }
+        super.onDestroy()
+    }
 }
