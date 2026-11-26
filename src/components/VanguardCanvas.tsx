@@ -11,11 +11,13 @@ import {
   NewbornAIState,
   PHYSICS_PARAMS,
   computeDollyZoomFov,
+  computePanicMetrics,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
   resolveCircleWallCollision,
 } from "../game/gameLogic";
+import { panicLogger } from "../game/panicLogger";
 import { buildFlashlightCookieTexture } from "../game/resourceCache";
 import { SoundEngine } from "../game/soundEngine";
 import {
@@ -44,6 +46,9 @@ export interface LiveTelemetry {
   nearbyId: string | null;
   nearbyLabel: string | null;
   proximityGlitch: number;
+  panicPct: number;
+  heartRateBpm: number;
+  radialBlurStrength: number;
 }
 
 export interface GameActionEvent {
@@ -57,6 +62,7 @@ interface VanguardCanvasProps {
   pausedByModal: boolean;
   health: HealthState;
   photosensitiveMode: boolean;
+  kitsCount?: number;
   hasKitPickup: boolean;
   hasBadgePickup: boolean;
   relaySolved: boolean;
@@ -80,6 +86,8 @@ const HorrorPostShader = {
     tDiffuse: { value: null },
     uTime: { value: 0 },
     uFear: { value: 0 },
+    uRadialBlur: { value: 0 },
+    uLensDistortion: { value: 0 },
     uChromatic: { value: 0.0012 },
     uVignette: { value: 0.62 },
   },
@@ -94,6 +102,8 @@ const HorrorPostShader = {
     uniform sampler2D tDiffuse;
     uniform float uTime;
     uniform float uFear;
+    uniform float uRadialBlur;
+    uniform float uLensDistortion;
     uniform float uChromatic;
     uniform float uVignette;
     varying vec2 vUv;
@@ -104,18 +114,43 @@ const HorrorPostShader = {
 
     void main() {
       vec2 center = vUv - 0.5;
-      float dist = length(center);
-      float ca = uChromatic * (1.0 + uFear * 3.2) * dist;
+      float dist2 = dot(center, center);
+      float dist = sqrt(dist2);
 
-      float r = texture2D(tDiffuse, vUv + vec2(ca, 0.0)).r;
-      float g = texture2D(tDiffuse, vUv).g;
-      float b = texture2D(tDiffuse, vUv - vec2(ca, 0.0)).b;
-      vec3 col = vec3(r, g, b);
+      // Distorção de lente (Dolly Zoom warp) escalada pelo medo e nível de saúde
+      vec2 warpedUv = 0.5 + center * (1.0 - uLensDistortion * 0.24 * dist2);
+      warpedUv = clamp(warpedUv, 0.002, 0.998);
 
-      float grain = (rand(vUv * vec2(640.0, 360.0) + fract(uTime) * 37.0) - 0.5) * (0.045 + uFear * 0.055);
+      // Desfoque radial em 5 amostras quando o Newborn detecta ou saúde cai
+      vec3 col = texture2D(tDiffuse, warpedUv).rgb;
+      if (uRadialBlur > 0.02) {
+        vec2 blurDir = center * (0.028 * uRadialBlur * dist);
+        vec3 accum = col;
+        accum += texture2D(tDiffuse, clamp(warpedUv - blurDir * 0.5, 0.002, 0.998)).rgb;
+        accum += texture2D(tDiffuse, clamp(warpedUv - blurDir * 1.0, 0.002, 0.998)).rgb;
+        accum += texture2D(tDiffuse, clamp(warpedUv - blurDir * 1.5, 0.002, 0.998)).rgb;
+        accum += texture2D(tDiffuse, clamp(warpedUv - blurDir * 2.0, 0.002, 0.998)).rgb;
+        col = accum * 0.2;
+      }
+
+      // Aberração cromática acentuada nas bordas
+      float ca = uChromatic * (1.0 + uFear * 4.2 + uLensDistortion * 2.4) * dist;
+      float r = texture2D(tDiffuse, clamp(warpedUv + vec2(ca, 0.0), 0.002, 0.998)).r;
+      float b = texture2D(tDiffuse, clamp(warpedUv - vec2(ca, 0.0), 0.002, 0.998)).b;
+      col.r = mix(col.r, r, 0.72);
+      col.b = mix(col.b, b, 0.72);
+
+      float grain = (rand(vUv * vec2(640.0, 360.0) + fract(uTime) * 37.0) - 0.5) * (0.045 + uFear * 0.06);
       col += grain;
 
-      float vig = smoothstep(0.32, 0.92, dist) * uVignette;
+      // Gradação cinematográfica de terror (sombras frias profundas + realces levemente quentes)
+      float luma = dot(col, vec3(0.299, 0.587, 0.114));
+      vec3 shadowTint = vec3(0.92, 0.98, 1.06);
+      vec3 highlightTint = vec3(1.06, 1.01, 0.94);
+      col *= mix(shadowTint, highlightTint, smoothstep(0.08, 0.72, luma));
+      col = mix(col, col * col * (3.0 - 2.0 * col), 0.24);
+
+      float vig = smoothstep(0.30, 0.92, dist) * (uVignette + uFear * 0.14);
       col *= (1.0 - vig);
 
       gl_FragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -133,6 +168,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   pausedByModal,
   health,
   photosensitiveMode,
+  kitsCount = 0,
   hasKitPickup,
   hasBadgePickup,
   relaySolved,
@@ -153,6 +189,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     pausedByModal,
     health,
     photosensitiveMode,
+    kitsCount,
     hasKitPickup,
     hasBadgePickup,
     relaySolved,
@@ -169,6 +206,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     pausedByModal,
     health,
     photosensitiveMode,
+    kitsCount,
     hasKitPickup,
     hasBadgePickup,
     relaySolved,
@@ -272,7 +310,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.85;
+    renderer.toneMappingExposure = 0.96;
     renderer.setPixelRatio(
       isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2)
     );
@@ -289,7 +327,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const envTex = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = envTex;
-    scene.environmentIntensity = 0.12;
+    scene.environmentIntensity = 0.16;
     pmremGenerator.dispose();
 
     const camera = new THREE.PerspectiveCamera(
@@ -401,6 +439,41 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         return;
       }
 
+      const logResourceEvent = (label: string) => {
+        const s = simRef.current;
+        const dist = Math.hypot(s.nx - s.px, s.nz - s.pz);
+        const batteryPct = Math.round((s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100);
+        const metrics = computePanicMetrics({
+          health: st.health,
+          newbornDist: dist,
+          newbornVisible: world.newborn.root.visible,
+          newbornState: s.newbornState,
+          batteryPct,
+          flashlightOn: s.flashlightOn,
+          hidingInLocker: s.hidingInLocker,
+          holdingBreath: s.holdingBreath,
+        });
+        panicLogger.log(
+          {
+            event: "resource_use",
+            detail: label,
+            panicPct: Math.round(metrics.panicLevel * 100),
+            heartRateBpm: metrics.estimatedBpm,
+            newbornDistM: dist,
+            newbornState: s.newbornState,
+            health: st.health,
+            resources: {
+              batteryPct,
+              flashlightOn: s.flashlightOn,
+              tricorderOn: s.tricorderOn,
+              hidingInLocker: s.hidingInLocker,
+              kitsRemaining: st.kitsCount,
+            },
+          },
+          true
+        );
+      };
+
       if (!e.repeat) {
         if (code === "KeyC" || code === "ControlLeft") {
           simRef.current.crouching = !simRef.current.crouching;
@@ -408,10 +481,16 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         } else if (code === "KeyL") {
           simRef.current.flashlightOn = !simRef.current.flashlightOn;
           soundEngine.playClick(760);
+          logResourceEvent(
+            simRef.current.flashlightOn ? "Lanterna Tática ligada" : "Lanterna Tática apagada"
+          );
         } else if (code === "KeyT") {
           simRef.current.tricorderOn = !simRef.current.tricorderOn;
           if (simRef.current.tricorderOn) soundEngine.playTricorderChirp();
           else soundEngine.playClick(600);
+          logResourceEvent(
+            simRef.current.tricorderOn ? "Tricorder ativado" : "Tricorder recolhido"
+          );
         } else if (code === "KeyH") {
           st.onAction({ type: "use_heal" });
         } else if (code === "KeyF") {
@@ -419,6 +498,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           if (near?.id === "locker_xray") {
             simRef.current.hidingInLocker = !simRef.current.hidingInLocker;
             soundEngine.playDoorPneumatic();
+            logResourceEvent(
+              simRef.current.hidingInLocker ? "Escondeu-se no Armário" : "Saiu do Armário"
+            );
           } else if (near) {
             st.onAction({ type: "interact", targetId: near.id });
           }
@@ -1005,7 +1087,43 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           currentState: s.newbornState,
         });
 
+        const prevState = s.newbornState;
         s.newbornState = perc.nextState;
+        if (s.newbornState !== prevState) {
+          const batteryPct = Math.round((s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100);
+          const metrics = computePanicMetrics({
+            health: st.health,
+            newbornDist: dist,
+            newbornVisible: true,
+            newbornState: s.newbornState,
+            batteryPct,
+            flashlightOn: s.flashlightOn,
+            hidingInLocker: s.hidingInLocker,
+            holdingBreath: s.holdingBreath,
+          });
+          panicLogger.log(
+            {
+              event:
+                s.newbornState === "Hunt" || s.newbornState === "Investigate"
+                  ? "detection_trigger"
+                  : "state_transition",
+              detail: `Newborn ${prevState} -> ${s.newbornState} (via ${perc.detectedBy})`,
+              panicPct: Math.round(metrics.panicLevel * 100),
+              heartRateBpm: metrics.estimatedBpm,
+              newbornDistM: dist,
+              newbornState: s.newbornState,
+              health: st.health,
+              resources: {
+                batteryPct,
+                flashlightOn: s.flashlightOn,
+                tricorderOn: s.tricorderOn,
+                hidingInLocker: s.hidingInLocker,
+                kitsRemaining: st.kitsCount,
+              },
+            },
+            true
+          );
+        }
         if (perc.detectedBy === "sound" || perc.detectedBy === "scent") {
           s.investigateX = s.px;
           s.investigateZ = s.pz;
@@ -1091,33 +1209,40 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       applyNewbornPose(s.newbornState, elapsed);
 
       const distPlayer = Math.hypot(s.nx - s.px, s.nz - s.pz);
+      const batteryPct = Math.round((s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100);
+      const panicMetrics = computePanicMetrics({
+        health: st.health,
+        newbornDist: distPlayer,
+        newbornVisible: world.newborn.root.visible,
+        newbornState: s.newbornState,
+        batteryPct,
+        flashlightOn: s.flashlightOn,
+        hidingInLocker: s.hidingInLocker,
+        holdingBreath: s.holdingBreath,
+      });
 
-      // Dolly Zoom dinâmico (FOV 64° -> 54° na caçada/observação)
+      // Dolly Zoom dinâmico (FOV 64° -> 54° / 50° quando detectado ou ferido)
       const targetFov = computeDollyZoomFov(
         distPlayer,
         world.newborn.root.visible,
-        s.newbornState
+        s.newbornState,
+        st.health
       );
       if (Math.abs(camera.fov - targetFov) > 0.05) {
-        camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 4.5, dt);
+        camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 5.2, dt);
         camera.updateProjectionMatrix();
       }
 
       // Balanço de respiração + tremor de pânico no Viewmodel 1ª Pessoa
-      const fearLevel =
-        st.health === "vermelho"
-          ? 0.9
-          : world.newborn.root.visible
-            ? Math.max(0, Math.min(1, (10 - distPlayer) / 8))
-            : 0.06;
+      const fearLevel = panicMetrics.panicLevel;
       const walkBob =
         mag > 0.05 && !s.hidingInLocker
           ? Math.sin(elapsed * (sprinting ? 14 : 8.5)) * 0.012
           : 0;
-      const breathBob = Math.sin(elapsed * 2.1) * 0.005;
+      const breathBob = Math.sin(elapsed * (2.1 + fearLevel * 1.4)) * 0.005;
       const panicTremor =
         fearLevel > 0.25 && !st.photosensitiveMode
-          ? Math.sin(elapsed * 33.0) * fearLevel * 0.0065
+          ? Math.sin(elapsed * 33.0) * fearLevel * 0.0075
           : 0;
 
       world.viewmodel.rightHand.position.set(
@@ -1127,6 +1252,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       );
       world.viewmodel.flashlightLensMat.emissiveIntensity =
         s.flashlightOn && s.batterySec > 0 ? 1.8 : 0.05;
+      world.viewmodel.beamConeMesh.visible = s.flashlightOn && s.batterySec > 0;
 
       const targetTriY = s.tricorderOn ? -0.145 : -0.46;
       world.viewmodel.leftHand.position.x = -0.26 - panicTremor * 0.7;
@@ -1140,12 +1266,49 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         ? 1.4
         : 0;
 
-      // Atualiza shader leve de pós-processamento (Grão + Vinheta + Aberração Cromática)
+      // Atualiza shader de pós-processamento (Radial Blur + Distorção Dolly Zoom + Grão + Aberração Cromática)
       if (horrorPass) {
         horrorPass.uniforms.uTime.value = elapsed;
         horrorPass.uniforms.uFear.value = st.photosensitiveMode
-          ? 0.15
+          ? Math.min(0.25, fearLevel)
           : fearLevel;
+        const targetRadial = st.photosensitiveMode
+          ? panicMetrics.radialBlurStrength * 0.35
+          : panicMetrics.radialBlurStrength;
+        const targetDistort = st.photosensitiveMode
+          ? panicMetrics.lensDistortion * 0.35
+          : panicMetrics.lensDistortion;
+        horrorPass.uniforms.uRadialBlur.value = THREE.MathUtils.damp(
+          horrorPass.uniforms.uRadialBlur.value,
+          targetRadial,
+          6.0,
+          dt
+        );
+        horrorPass.uniforms.uLensDistortion.value = THREE.MathUtils.damp(
+          horrorPass.uniforms.uLensDistortion.value,
+          targetDistort,
+          6.0,
+          dt
+        );
+      }
+
+      if (panicMetrics.panicLevel >= 0.38 || st.health === "vermelho") {
+        panicLogger.log({
+          event: "panic_sample",
+          detail: `Amostra contínua (${ch.shortLabel})`,
+          panicPct: Math.round(panicMetrics.panicLevel * 100),
+          heartRateBpm: panicMetrics.estimatedBpm,
+          newbornDistM: distPlayer,
+          newbornState: s.newbornState,
+          health: st.health,
+          resources: {
+            batteryPct,
+            flashlightOn: s.flashlightOn,
+            tricorderOn: s.tricorderOn,
+            hidingInLocker: s.hidingInLocker,
+            kitsRemaining: st.kitsCount,
+          },
+        });
       }
 
       s.jawClickTimer += dt;
@@ -1188,6 +1351,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           nearbyId: near?.id ?? null,
           nearbyLabel: near?.label ?? null,
           proximityGlitch: glitch,
+          panicPct: Math.round(panicMetrics.panicLevel * 100),
+          heartRateBpm: panicMetrics.estimatedBpm,
+          radialBlurStrength: panicMetrics.radialBlurStrength,
         });
       }
     }

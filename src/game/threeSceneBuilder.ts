@@ -1,9 +1,13 @@
 import * as THREE from "three";
 import { ChapterConfig, PHYSICS_PARAMS } from "./gameLogic";
 import {
+  buildBeamConeTexture,
+  buildCeilingGrateTexture,
   buildCrtFaceTexture,
   buildFloorTileTexture,
   buildGrimyGlassTexture,
+  buildNewbornSkinMaps,
+  buildTricorderScreenTexture,
   buildWallPanelTexture,
   loadGlbModelOrFallback,
 } from "./resourceCache";
@@ -27,6 +31,7 @@ export interface ViewmodelRig {
   rightHand: THREE.Group;
   leftHand: THREE.Group;
   flashlightLensMat: THREE.MeshStandardMaterial;
+  beamConeMesh: THREE.Mesh;
   tricorderScreenMat: THREE.MeshStandardMaterial;
 }
 
@@ -72,45 +77,65 @@ export function attachFirstPersonViewmodel(
   const root = new THREE.Group();
 
   const sleeveMat = new THREE.MeshStandardMaterial({
-    color: 0x1e2530,
-    roughness: 0.85,
-    metalness: 0.08,
+    color: 0x1a2029,
+    roughness: 0.88,
+    metalness: 0.06,
   });
   const gloveMat = new THREE.MeshStandardMaterial({
-    color: 0x11151c,
-    roughness: 0.62,
-    metalness: 0.15,
+    color: 0x0e1218,
+    roughness: 0.56,
+    metalness: 0.16,
   });
   const metalDarkMat = new THREE.MeshStandardMaterial({
-    color: 0x141921,
-    roughness: 0.42,
-    metalness: 0.72,
+    color: 0x161c24,
+    roughness: 0.34,
+    metalness: 0.82,
+  });
+  const knurlMat = new THREE.MeshStandardMaterial({
+    color: 0x26303d,
+    roughness: 0.45,
+    metalness: 0.78,
   });
   const flashlightLensMat = new THREE.MeshStandardMaterial({
     color: 0xfef3c7,
     emissive: 0xfde68a,
-    emissiveIntensity: 1.5,
-    roughness: 0.15,
+    emissiveIntensity: 1.6,
+    roughness: 0.12,
   });
+  const tricorderTex = buildTricorderScreenTexture();
   const tricorderScreenMat = new THREE.MeshStandardMaterial({
-    color: 0x06b6d4,
-    emissive: 0x0891b2,
-    emissiveIntensity: 1.3,
-    roughness: 0.2,
+    color: 0xffffff,
+    map: tricorderTex,
+    emissive: 0x67e8f9,
+    emissiveMap: tricorderTex,
+    emissiveIntensity: 1.35,
+    roughness: 0.18,
+  });
+  const beamConeTex = buildBeamConeTexture();
+  const beamConeMat = new THREE.MeshBasicMaterial({
+    map: beamConeTex,
+    color: 0xfff0d4,
+    transparent: true,
+    opacity: 0.055,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
   });
   disposables.push(
     sleeveMat,
     gloveMat,
     metalDarkMat,
+    knurlMat,
     flashlightLensMat,
-    tricorderScreenMat
+    tricorderScreenMat,
+    beamConeMat
   );
 
-  // Mão Direita: Lanterna Tática de Dínamo
+  // Mão Direita: Lanterna Tática de Dínamo multi-peças + feixe atmosférico
   const rightHand = new THREE.Group();
   rightHand.position.set(0.24, -0.22, -0.38);
 
-  const armGeo = new THREE.CylinderGeometry(0.036, 0.044, 0.34, 10);
+  const armGeo = new THREE.CylinderGeometry(0.036, 0.046, 0.34, 12);
   const rightArmMesh = new THREE.Mesh(armGeo, sleeveMat);
   rightArmMesh.rotation.x = Math.PI * 0.42;
   rightArmMesh.position.set(0.03, -0.05, 0.14);
@@ -119,24 +144,52 @@ export function attachFirstPersonViewmodel(
   const rightGlove = new THREE.Mesh(gripGeo, gloveMat);
   rightGlove.position.set(0, -0.005, 0.01);
 
-  const barrelGeo = new THREE.CylinderGeometry(0.019, 0.018, 0.2, 12);
+  const fingerGeo = new THREE.CylinderGeometry(0.008, 0.007, 0.042, 6);
+  for (let f = 0; f < 3; f++) {
+    const finger = new THREE.Mesh(fingerGeo, gloveMat);
+    finger.rotation.z = Math.PI / 2;
+    finger.position.set(-0.022, 0.008, -0.018 + f * 0.018);
+    rightHand.add(finger);
+  }
+
+  const barrelGeo = new THREE.CylinderGeometry(0.019, 0.018, 0.21, 14);
   const barrel = new THREE.Mesh(barrelGeo, metalDarkMat);
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0, 0.012, -0.04);
 
-  const headGeo = new THREE.CylinderGeometry(0.027, 0.021, 0.045, 12);
+  const collarGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.055, 14);
+  const collar = new THREE.Mesh(collarGeo, knurlMat);
+  collar.rotation.x = Math.PI / 2;
+  collar.position.set(0, 0.012, -0.08);
+
+  const headGeo = new THREE.CylinderGeometry(0.029, 0.021, 0.05, 14);
   const head = new THREE.Mesh(headGeo, metalDarkMat);
   head.rotation.x = Math.PI / 2;
   head.position.set(0, 0.012, -0.155);
 
-  const lensGeo = new THREE.CircleGeometry(0.022, 12);
+  const lensGeo = new THREE.CircleGeometry(0.024, 14);
   const lens = new THREE.Mesh(lensGeo, flashlightLensMat);
   lens.rotation.y = Math.PI;
-  lens.position.set(0, 0.012, -0.178);
+  lens.position.set(0, 0.012, -0.181);
 
-  rightHand.add(rightArmMesh, rightGlove, barrel, head, lens);
+  // Cone de luz atmosférica sutil na ponta da lanterna
+  const beamConeGeo = new THREE.ConeGeometry(0.55, 2.4, 16, 1, true);
+  beamConeGeo.translate(0, -1.2, 0);
+  beamConeGeo.rotateX(Math.PI / 2);
+  const beamConeMesh = new THREE.Mesh(beamConeGeo, beamConeMat);
+  beamConeMesh.position.set(0, 0.012, -0.182);
 
-  // Mão Esquerda: Tricorder Portátil (inclinado para o jogador ao subir)
+  rightHand.add(
+    rightArmMesh,
+    rightGlove,
+    barrel,
+    collar,
+    head,
+    lens,
+    beamConeMesh
+  );
+
+  // Mão Esquerda: Tricorder Portátil OLED com moldura chanfrada e botões
   const leftHand = new THREE.Group();
   leftHand.position.set(-0.24, -0.46, -0.34);
   leftHand.rotation.set(0.08, 0.28, -0.06);
@@ -146,50 +199,87 @@ export function attachFirstPersonViewmodel(
   leftArmMesh.position.set(-0.03, -0.06, 0.14);
 
   const leftGlove = new THREE.Mesh(gripGeo, gloveMat);
-  const triBodyGeo = new THREE.BoxGeometry(0.095, 0.145, 0.024);
+  const triBodyGeo = new THREE.BoxGeometry(0.098, 0.152, 0.026);
   const triBody = new THREE.Mesh(triBodyGeo, metalDarkMat);
   triBody.rotation.x = -0.25;
   triBody.position.set(0.01, 0.035, -0.04);
 
-  const triScreenGeo = new THREE.PlaneGeometry(0.075, 0.068);
+  const triBezelGeo = new THREE.BoxGeometry(0.088, 0.082, 0.028);
+  const triBezel = new THREE.Mesh(triBezelGeo, knurlMat);
+  triBezel.rotation.x = -0.25;
+  triBezel.position.set(0.01, 0.056, -0.036);
+
+  const triScreenGeo = new THREE.PlaneGeometry(0.078, 0.072);
   const triScreen = new THREE.Mesh(triScreenGeo, tricorderScreenMat);
   triScreen.rotation.x = -0.25;
-  triScreen.position.set(0.01, 0.052, -0.024);
+  triScreen.position.set(0.01, 0.056, -0.021);
 
-  leftHand.add(leftArmMesh, leftGlove, triBody, triScreen);
+  const triAntennaGeo = new THREE.CylinderGeometry(0.004, 0.006, 0.038, 8);
+  const triAntenna = new THREE.Mesh(triAntennaGeo, knurlMat);
+  triAntenna.rotation.x = -0.25;
+  triAntenna.position.set(-0.028, 0.122, -0.058);
+
+  leftHand.add(
+    leftArmMesh,
+    leftGlove,
+    triBody,
+    triBezel,
+    triScreen,
+    triAntenna
+  );
   root.add(rightHand, leftHand);
   camera.add(root);
 
   disposables.push(
     armGeo,
     gripGeo,
+    fingerGeo,
     barrelGeo,
+    collarGeo,
     headGeo,
     lensGeo,
+    beamConeGeo,
     triBodyGeo,
-    triScreenGeo
+    triBezelGeo,
+    triScreenGeo,
+    triAntennaGeo
   );
 
-  return { root, rightHand, leftHand, flashlightLensMat, tricorderScreenMat };
+  return {
+    root,
+    rightHand,
+    leftHand,
+    flashlightLensMat,
+    beamConeMesh,
+    tricorderScreenMat,
+  };
 }
 
 export function createNewbornModel(
-  disposables: Array<{ dispose: () => void }>
+  disposables: Array<{ dispose: () => void }>,
+  maxAniso = 4
 ): NewbornRig {
   const root = new THREE.Group();
+  const skinMaps = buildNewbornSkinMaps(maxAniso);
 
-  // Pele úmida, macilenta e ferida (MeshPhysicalMaterial úmido com clearcoat visceral)
+  // Pele úmida, macilenta, venosa e ferida (MeshPhysicalMaterial orgânico com clearcoat + sheen)
   const skinMat = new THREE.MeshPhysicalMaterial({
-    color: 0x6f5e5b,
-    roughness: 0.24,
-    metalness: 0.03,
-    clearcoat: 0.72,
-    clearcoatRoughness: 0.16,
+    color: 0xd8ccc9,
+    map: skinMaps.map,
+    normalMap: skinMaps.normalMap,
+    normalScale: new THREE.Vector2(1.15, 1.15),
+    roughnessMap: skinMaps.roughnessMap,
+    roughness: 0.48,
+    metalness: 0.02,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.14,
+    sheen: 0.35,
+    sheenColor: new THREE.Color(0x4a151b),
   });
   const sinewMat = new THREE.MeshStandardMaterial({
-    color: 0x352325,
-    roughness: 0.48,
-    metalness: 0.06,
+    color: 0x3b2225,
+    roughness: 0.44,
+    metalness: 0.05,
   });
   const socketMat = new THREE.MeshStandardMaterial({
     color: 0x020102,
@@ -305,11 +395,21 @@ export function createNewbornModel(
     torsoGroup.add(knob);
   }
 
-  // Ombros ossudos deslocados para frente
-  const shoulderGeo = new THREE.BoxGeometry(0.64, 0.1, 0.2);
+  // Clavículas e ombros ossudos deslocados para frente
+  const shoulderGeo = new THREE.BoxGeometry(0.64, 0.09, 0.19);
   const shoulders = new THREE.Mesh(shoulderGeo, sinewMat);
   shoulders.position.set(0, 0.82, 0.08);
   torsoGroup.add(shoulders);
+
+  const clavicleGeo = new THREE.CylinderGeometry(0.022, 0.018, 0.28, 6);
+  for (const side of [-1, 1]) {
+    const clav = new THREE.Mesh(clavicleGeo, teethMat);
+    clav.rotation.z = side * 1.25;
+    clav.rotation.y = side * -0.25;
+    clav.position.set(side * 0.17, 0.85, 0.15);
+    torsoGroup.add(clav);
+  }
+  disposables.push(clavicleGeo);
 
   disposables.push(
     pelvisGeo,
@@ -364,6 +464,13 @@ export function createNewbornModel(
   cranium.scale.set(0.78, 1.28, 1.06);
   cranium.castShadow = true;
   head.add(cranium);
+
+  // Arcada supraciliar saliente sobre órbitas fundas
+  const browGeo = new THREE.BoxGeometry(0.24, 0.042, 0.12);
+  const brow = new THREE.Mesh(browGeo, sinewMat);
+  brow.position.set(0, 0.1, 0.13);
+  head.add(brow);
+  disposables.push(browGeo);
 
   const mawGeo = new THREE.SphereGeometry(0.095, 10, 10);
   const mawCavity = new THREE.Mesh(mawGeo, clawBloodMat);
@@ -586,18 +693,20 @@ export function buildChapterScene(
   // Poças escuras de sangue coagulado / fluido químico no chão (sem reflexo cinza artificial)
   const puddleGeo = new THREE.CircleGeometry(1, 14);
   const bloodPuddleMat = new THREE.MeshStandardMaterial({
-    color: 0x260204,
-    emissive: 0x080000,
-    roughness: 0.34,
-    metalness: 0.04,
+    color: 0x1c0103,
+    emissive: 0x060000,
+    roughness: 0.56,
+    metalness: 0.0,
+    envMapIntensity: 0.12,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
   const waterPuddleMat = new THREE.MeshStandardMaterial({
-    color: chapter.palette === "biolab" ? 0x091f12 : 0x060b12,
-    roughness: 0.36,
-    metalness: 0.05,
+    color: chapter.palette === "biolab" ? 0x07190e : 0x04080e,
+    roughness: 0.52,
+    metalness: 0.0,
+    envMapIntensity: 0.16,
     polygonOffset: true,
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
@@ -616,12 +725,17 @@ export function buildChapterScene(
     scene.add(pm);
   }
 
-  // Teto escuro baixo (2.85m) + grades metálicas e vigas estruturais em InstancedMesh
+  // Teto escuro baixo (2.85m) com grades PBR + vigas estruturais + tubulações longitudinais em InstancedMesh
+  const ceilTex = buildCeilingGrateTexture(maxAniso);
   const ceilingGeo = new THREE.PlaneGeometry(21, 21);
   const ceilingMat = new THREE.MeshStandardMaterial({
-    color: 0x080b10,
-    roughness: 0.88,
-    metalness: 0.3,
+    color: 0xffffff,
+    map: ceilTex.map,
+    normalMap: ceilTex.normalMap,
+    normalScale: new THREE.Vector2(0.85, 0.85),
+    roughnessMap: ceilTex.roughnessMap,
+    roughness: 0.86,
+    metalness: 0.35,
   });
   const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
   ceiling.rotation.x = Math.PI / 2;
@@ -629,12 +743,12 @@ export function buildChapterScene(
   scene.add(ceiling);
   disposables.push(ceilingGeo, ceilingMat);
 
-  // Vigas transversais no teto + cabos pendurados
+  // Vigas transversais no teto + tubulações de conduíte industrial + grade de duto aberto
   const beamGeo = new THREE.BoxGeometry(19.0, 0.16, 0.24);
   const beamMat = new THREE.MeshStandardMaterial({
     color: 0x161d27,
-    roughness: 0.55,
-    metalness: 0.72,
+    roughness: 0.52,
+    metalness: 0.76,
   });
   const beamZs = [-4.2, -1.0, 2.2, 5.4, 8.6, 11.8];
   const beamsInst = new THREE.InstancedMesh(beamGeo, beamMat, beamZs.length);
@@ -645,8 +759,35 @@ export function buildChapterScene(
     beamsInst.setMatrixAt(idx, dummy.matrix);
   });
   beamsInst.instanceMatrix.needsUpdate = true;
+  beamsInst.computeBoundingSphere();
   scene.add(beamsInst);
   disposables.push(beamGeo, beamMat);
+
+  // Tubulações industriais paralelas ao corredor
+  const pipeGeo = new THREE.CylinderGeometry(0.055, 0.055, 19.5, 10);
+  pipeGeo.rotateX(Math.PI / 2);
+  const pipeMat = new THREE.MeshStandardMaterial({
+    color: 0x2a2320,
+    roughness: 0.62,
+    metalness: 0.65,
+  });
+  const pipeOffsets = [-1.18, -1.02, 1.05, 1.2];
+  const pipesInst = new THREE.InstancedMesh(pipeGeo, pipeMat, pipeOffsets.length);
+  pipeOffsets.forEach((px, idx) => {
+    dummy.position.set(px, CEIL_H - 0.21, 4.2);
+    dummy.updateMatrix();
+    pipesInst.setMatrixAt(idx, dummy.matrix);
+  });
+  pipesInst.instanceMatrix.needsUpdate = true;
+  pipesInst.computeBoundingSphere();
+  scene.add(pipesInst);
+
+  // Escotilha escura de ventilação onde o Newborn cai (Z = 8.2)
+  const ventGeo = new THREE.BoxGeometry(1.15, 0.08, 1.15);
+  const ventHatch = new THREE.Mesh(ventGeo, beamMat);
+  ventHatch.position.set(0, CEIL_H - 0.04, 8.2);
+  scene.add(ventHatch);
+  disposables.push(pipeGeo, pipeMat, ventGeo);
 
   // Cabo elétrico rompido pendurado soltando faíscas
   const cableGeo = new THREE.TubeGeometry(
@@ -821,6 +962,24 @@ export function buildChapterScene(
       sill.position.set(cx, 0.45, cz);
       scene.add(sill);
       disposables.push(sillGeo);
+    }
+
+    if (w.kind === "desk") {
+      // Balcão / Mesa com tampo chanfrado + prancheta e terminal caído em cima
+      const rimGeo = new THREE.BoxGeometry(sx + 0.08, 0.06, sz + 0.08);
+      const rim = new THREE.Mesh(rimGeo, rustTrimMat);
+      rim.position.set(cx, sy + 0.02, cz);
+      const paperGeo = new THREE.BoxGeometry(0.26, 0.014, 0.34);
+      const paperMat = new THREE.MeshStandardMaterial({
+        color: 0x3b424c,
+        roughness: 0.96,
+        metalness: 0.02,
+      });
+      const paper = new THREE.Mesh(paperGeo, paperMat);
+      paper.position.set(cx - 0.38, sy + 0.055, cz + 0.04);
+      paper.rotation.y = 0.28;
+      scene.add(rim, paper);
+      disposables.push(rimGeo, paperGeo, paperMat);
     }
 
     mesh.castShadow = !isSoftwareGl && w.kind !== "glass";
@@ -1099,6 +1258,11 @@ export function buildChapterScene(
   frameTop.position.set(0, CEIL_H - 0.18, 0);
   const exitDoorMesh = new THREE.Mesh(doorGeo, exitDoorMat);
   exitDoorMesh.position.set(0, 1.25, 0);
+  // Barra transversal pneumática na comporta
+  const barGeo = new THREE.BoxGeometry(1.96, 0.14, 0.28);
+  const doorBar = new THREE.Mesh(barGeo, rustTrimMat);
+  doorBar.position.set(0, 0.0, 0);
+  exitDoorMesh.add(doorBar);
   const keypadMesh = new THREE.Mesh(padGeo, exitDoorLightMat);
   keypadMesh.position.set(1.2, 1.3, -0.22);
   exitDoorGroup.add(frameLeft, frameRight, frameTop, exitDoorMesh, keypadMesh);
@@ -1116,13 +1280,14 @@ export function buildChapterScene(
     frameSideGeo,
     frameTopGeo,
     doorGeo,
+    barGeo,
     padGeo,
     exitDoorMat,
     exitDoorLightMat
   );
 
   // 6. Newborn Orgânico + Viewmodel 1ª Pessoa
-  const newborn = createNewbornModel(disposables);
+  const newborn = createNewbornModel(disposables, maxAniso);
   newborn.root.position.set(-1.0, 0, 3.2);
   scene.add(newborn.root);
 

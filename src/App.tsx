@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Film,
   Flashlight,
   HeartPulse,
   Pause,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import { AiStudioModal } from "./components/AiStudioModal";
 import { BadgeInspectModal } from "./components/BadgeInspectModal";
+import { CreditsModal } from "./components/CreditsModal";
 import { KeypadModal } from "./components/KeypadModal";
 import { PaddModal, PaddTab } from "./components/PaddModal";
 import { RelayPuzzleModal } from "./components/RelayPuzzleModal";
@@ -31,8 +33,10 @@ import {
   PHYSICS_PARAMS,
   RelayState,
   addItemToInventory,
+  computeExponentialHeartbeatPulse,
   computeHeartbeatIntervalMs,
 } from "./game/gameLogic";
+import { panicLogger } from "./game/panicLogger";
 import {
   ResourceCacheSnapshot,
   preloadEssentialResources,
@@ -60,6 +64,9 @@ const INITIAL_TELEMETRY: LiveTelemetry = {
   nearbyId: null,
   nearbyLabel: null,
   proximityGlitch: 0,
+  panicPct: 8,
+  heartRateBpm: 72,
+  radialBlurStrength: 0,
 };
 
 function formatDuration(sec: number): string {
@@ -127,17 +134,25 @@ export default function App() {
   const [relayOpen, setRelayOpen] = useState(false);
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [creditsOpen, setCreditsOpen] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
-  const [heartbeatPulse, setHeartbeatPulse] = useState(false);
+  const vignetteRef = useRef<HTMLDivElement | null>(null);
   const [runSeconds, setRunSeconds] = useState(0);
   const [resetSignal, setResetSignal] = useState(0);
 
+  const telemetryRef = useRef<LiveTelemetry>(INITIAL_TELEMETRY);
+  const kitsCount = useMemo(
+    () => inventory.find((it) => it.id === "kit_estanca")?.quantity ?? 0,
+    [inventory]
+  );
+
   const pausedByModal =
-    paddOpen || inspectOpen || relayOpen || keypadOpen || studioOpen;
+    paddOpen || inspectOpen || relayOpen || keypadOpen || studioOpen || creditsOpen;
 
   const handleTelemetry = useCallback((t: LiveTelemetry) => {
     newbornDistRef.current = t.newbornDist;
+    telemetryRef.current = t;
     setTelemetry(t);
   }, []);
 
@@ -194,39 +209,84 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [phase, pausedByModal]);
 
-  // Pulso de vinheta + batimento cardíaco sincronizados quando saúde está em "vermelho"
+  // Pulso exponencial contínuo da vinheta de dano sincronizado com batimento cardíaco em "vermelho"
   useEffect(() => {
     if (phase !== "playing" || pausedByModal || health !== "vermelho") {
-      setHeartbeatPulse(false);
       return;
     }
     let cancelled = false;
-    let beatTimeout = 0;
-    let pulseResetTimeout = 0;
+    let rafId = 0;
+    let lastBeatAt = performance.now();
+    let beatIntervalMs = computeHeartbeatIntervalMs(newbornDistRef.current);
 
-    const scheduleBeat = () => {
-      if (cancelled) return;
+    const triggerBeat = (now: number) => {
       const dist = newbornDistRef.current;
       const intensity = Math.max(0.35, Math.min(1.0, (14 - dist) / 12));
       soundEngine.playHeartbeat(intensity);
-      if (!photosensitiveMode) {
-        setHeartbeatPulse(true);
-        pulseResetTimeout = window.setTimeout(() => {
-          if (!cancelled) setHeartbeatPulse(false);
-        }, 220);
-      }
-      const nextMs = computeHeartbeatIntervalMs(dist);
-      beatTimeout = window.setTimeout(scheduleBeat, nextMs);
+      beatIntervalMs = computeHeartbeatIntervalMs(dist);
+      lastBeatAt = now;
+
+      const cur = telemetryRef.current;
+      panicLogger.log(
+        {
+          event: "heartbeat_spike",
+          detail: `Pulso cardíaco exponencial (intervalo ${beatIntervalMs}ms)`,
+          panicPct: cur.panicPct,
+          heartRateBpm: cur.heartRateBpm,
+          newbornDistM: dist,
+          newbornState: cur.newbornState,
+          health: "vermelho",
+          resources: {
+            batteryPct: Math.round((cur.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100),
+            flashlightOn: cur.flashlightOn,
+            tricorderOn: cur.tricorderOn,
+            hidingInLocker: cur.hidingInLocker,
+            kitsRemaining: kitsCount,
+          },
+        },
+        false
+      );
     };
 
-    scheduleBeat();
+    triggerBeat(lastBeatAt);
+
+    const stepVignette = (now: number) => {
+      if (cancelled) return;
+      const elapsed = now - lastBeatAt;
+      if (elapsed >= beatIntervalMs) {
+        triggerBeat(now);
+      }
+
+      const el = vignetteRef.current;
+      if (el) {
+        if (photosensitiveMode) {
+          el.style.boxShadow = "inset 0 0 110px rgba(185, 28, 28, 0.55)";
+        } else {
+          const dist = newbornDistRef.current;
+          const panicNorm = Math.max(0, Math.min(1, telemetryRef.current.panicPct / 100));
+          const proxNorm = Math.max(0, Math.min(1, (14 - dist) / 11));
+          const urgency = Math.max(0.25, Math.min(1, proxNorm * 0.55 + panicNorm * 0.45));
+          const ease = computeExponentialHeartbeatPulse(
+            now - lastBeatAt,
+            beatIntervalMs,
+            urgency
+          );
+          const spread = Math.round(92 + ease * (78 + urgency * 30));
+          const outerAlpha = (0.34 + ease * (0.42 + urgency * 0.14)).toFixed(3);
+          const innerSpread = Math.round(24 + ease * 36);
+          const innerAlpha = (0.22 + ease * 0.42).toFixed(3);
+          el.style.boxShadow = `inset 0 0 ${spread}px rgba(220, 38, 38, ${outerAlpha}), inset 0 0 ${innerSpread}px rgba(127, 29, 29, ${innerAlpha})`;
+        }
+      }
+      rafId = window.requestAnimationFrame(stepVignette);
+    };
+
+    rafId = window.requestAnimationFrame(stepVignette);
     return () => {
       cancelled = true;
-      window.clearTimeout(beatTimeout);
-      window.clearTimeout(pulseResetTimeout);
-      setHeartbeatPulse(false);
+      window.cancelAnimationFrame(rafId);
     };
-  }, [phase, pausedByModal, health, photosensitiveMode, soundEngine]);
+  }, [phase, pausedByModal, health, photosensitiveMode, soundEngine, kitsCount]);
 
   // Sons ambientais aleatórios de "distress" em baixa frequência durante gameplay
   useEffect(() => {
@@ -312,7 +372,7 @@ export default function App() {
 
   // Atalho de teclado Enter / Espaço na tela título
   useEffect(() => {
-    if (phase !== "title" || studioOpen) return;
+    if (phase !== "title" || studioOpen || creditsOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Enter" || e.code === "Space") {
         e.preventDefault();
@@ -321,7 +381,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, studioOpen, startFreshRun]);
+  }, [phase, studioOpen, creditsOpen, startFreshRun]);
 
   // ESC fecha modais ou retoma pausa
   useEffect(() => {
@@ -332,6 +392,7 @@ export default function App() {
         else if (keypadOpen) setKeypadOpen(false);
         else if (paddOpen) setPaddOpen(false);
         else if (studioOpen) setStudioOpen(false);
+        else if (creditsOpen) setCreditsOpen(false);
         else if (phase === "paused") setPhase("playing");
       } else if (e.code === "Tab" && paddOpen) {
         e.preventDefault();
@@ -340,7 +401,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inspectOpen, relayOpen, keypadOpen, paddOpen, studioOpen, phase]);
+  }, [inspectOpen, relayOpen, keypadOpen, paddOpen, studioOpen, creditsOpen, phase]);
 
   const handleUseKit = useCallback(() => {
     const idx = inventory.findIndex((it) => it.id === "kit_estanca");
@@ -361,8 +422,28 @@ export default function App() {
         )
         .filter((it) => it.quantity > 0)
     );
+    const cur = telemetryRef.current;
+    panicLogger.log(
+      {
+        event: "heal",
+        detail: "Kit de Estanca aplicado",
+        panicPct: Math.max(10, cur.panicPct - 35),
+        heartRateBpm: Math.max(76, cur.heartRateBpm - 38),
+        newbornDistM: cur.newbornDist,
+        newbornState: cur.newbornState,
+        health: "verde",
+        resources: {
+          batteryPct: Math.round((cur.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100),
+          flashlightOn: cur.flashlightOn,
+          tricorderOn: cur.tricorderOn,
+          hidingInLocker: cur.hidingInLocker,
+          kitsRemaining: Math.max(0, kitsCount - 1),
+        },
+      },
+      true
+    );
     showToast("Hemorragia estancada. Estado vital restaurado (VERDE).");
-  }, [inventory, health, soundEngine, showToast]);
+  }, [inventory, health, kitsCount, soundEngine, showToast]);
 
   const handleAction = useCallback(
     (action: GameActionEvent) => {
@@ -464,6 +545,26 @@ export default function App() {
 
   const handlePlayerHurt = useCallback(() => {
     setHealth((prev) => {
+      const cur = telemetryRef.current;
+      panicLogger.log(
+        {
+          event: "injury",
+          detail: prev === "verde" ? "Primeiro golpe sofrido (VERMELHO)" : "Golpe fatal (Game Over)",
+          panicPct: 98,
+          heartRateBpm: 182,
+          newbornDistM: cur.newbornDist,
+          newbornState: cur.newbornState,
+          health: "vermelho",
+          resources: {
+            batteryPct: Math.round((cur.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100),
+            flashlightOn: cur.flashlightOn,
+            tricorderOn: cur.tricorderOn,
+            hidingInLocker: cur.hidingInLocker,
+            kitsRemaining: kitsCount,
+          },
+        },
+        true
+      );
       if (prev === "verde") {
         showToast("FERIDO! Use um Kit de Estanca [H] ou fuja pela escuridão!");
         return "vermelho";
@@ -472,7 +573,7 @@ export default function App() {
       setPhase("gameover");
       return "vermelho";
     });
-  }, [showToast]);
+  }, [kitsCount, showToast]);
 
   const handleNewbornVentTriggered = useCallback(() => {
     showToast("ALERTA: O Newborn caiu do duto de ventilação!");
@@ -538,6 +639,7 @@ export default function App() {
         pausedByModal={pausedByModal}
         health={health}
         photosensitiveMode={photosensitiveMode}
+        kitsCount={kitsCount}
         hasKitPickup={hasKitPickup}
         hasBadgePickup={hasBadgePickup}
         relaySolved={relayState.solved}
@@ -551,17 +653,16 @@ export default function App() {
         mobileInputRef={mobileInputRef}
       />
 
-      {/* Vinheta de dano pulsante sincronizada com batimento cardíaco + interferência */}
+      {/* Vinheta de dano com curva exponencial sincronizada ao batimento cardíaco + interferência */}
       {phase === "playing" && (
         <div
+          ref={vignetteRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-10 transition-[box-shadow] duration-200"
+          className="pointer-events-none fixed inset-0 z-10"
           style={{
             boxShadow:
               health === "vermelho"
-                ? heartbeatPulse
-                  ? "inset 0 0 150px rgba(220, 38, 38, 0.78)"
-                  : "inset 0 0 95px rgba(185, 28, 28, 0.42)"
+                ? "inset 0 0 110px rgba(185, 28, 28, 0.52)"
                 : telemetry.proximityGlitch > 0.1 && !photosensitiveMode
                   ? `inset 0 0 85px rgba(6, 182, 212, ${telemetry.proximityGlitch * 0.34})`
                   : "inset 0 0 70px rgba(0, 0, 0, 0.45)",
@@ -657,7 +758,7 @@ export default function App() {
               })}
             </div>
 
-            <div className="mt-5 flex flex-wrap items-center gap-3">
+            <div className="mt-5 flex flex-wrap items-center gap-2.5">
               <button
                 type="button"
                 data-start="true"
@@ -675,6 +776,16 @@ export default function App() {
               >
                 <Radio className="h-4 w-4" />
                 Estúdio IA
+              </button>
+
+              <button
+                type="button"
+                data-credits="true"
+                onClick={() => setCreditsOpen(true)}
+                className="flex items-center gap-1.5 border border-slate-600/80 bg-[#0a0f18]/80 px-3 py-2.5 text-xs font-semibold text-slate-200 hover:border-amber-400 hover:text-amber-200"
+              >
+                <Film className="h-3.5 w-3.5" />
+                Créditos
               </button>
             </div>
 
@@ -1099,6 +1210,15 @@ export default function App() {
 
               <button
                 type="button"
+                onClick={() => setCreditsOpen(true)}
+                className="flex w-full items-center justify-center gap-2 border border-slate-700 bg-slate-900 py-2 text-xs font-medium text-amber-200 hover:border-amber-400"
+              >
+                <Film className="h-3.5 w-3.5" />
+                Créditos dos Criadores
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setPhase("title")}
                 className="w-full border border-slate-800 bg-[#080b12] py-2 text-xs text-slate-400 hover:text-slate-200"
               >
@@ -1217,18 +1337,18 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => setStudioOpen(true)}
-                className="flex items-center gap-2 border border-cyan-500/60 bg-cyan-950/60 px-4 py-3 text-xs font-semibold text-cyan-200 hover:bg-cyan-900"
+                onClick={() => setCreditsOpen(true)}
+                className="flex items-center gap-2 border border-amber-500/50 bg-amber-950/40 px-4 py-3 text-xs font-semibold text-amber-200 hover:bg-amber-900/50"
               >
-                <Radio className="h-4 w-4" />
-                Estúdio IA
+                <Film className="h-4 w-4" />
+                Créditos
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAIS DO PADD, INSPEÇÃO 3D, RELÉS, TECLADO E ESTÚDIO IA */}
+      {/* MODAIS DO PADD, INSPEÇÃO 3D, RELÉS, TECLADO, ESTÚDIO IA E CRÉDITOS */}
       {paddOpen && (
         <PaddModal
           chapter={activeChapter}
@@ -1314,6 +1434,7 @@ export default function App() {
       )}
 
       {studioOpen && <AiStudioModal onClose={() => setStudioOpen(false)} />}
+      {creditsOpen && <CreditsModal onClose={() => setCreditsOpen(false)} />}
     </div>
   );
 }

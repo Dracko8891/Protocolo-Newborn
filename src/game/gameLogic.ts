@@ -118,18 +118,135 @@ export function computeHeartbeatIntervalMs(newbornDist: number): number {
   return Math.round(380 + ((clamped - 1.2) / 16.8) * 580);
 }
 
+/**
+ * Curva de suavização (easing) exponencial para o pulso da vinheta de dano durante o heartbeat.
+ * Modela um ataque sistólico rápido seguido de decaimento exponencial (e^(-k*t)) + segundo pulso (lub-dub),
+ * aumentando a persistência e intensidade conforme a proximidade e o nível de pânico crescem.
+ */
+export function computeExponentialHeartbeatPulse(
+  elapsedSinceBeatMs: number,
+  intervalMs: number,
+  urgency = 0.5
+): number {
+  if (elapsedSinceBeatMs < 0 || intervalMs <= 0) return 0;
+  const clampedUrgency = Math.max(0, Math.min(1, urgency));
+  const tNorm = Math.min(1, elapsedSinceBeatMs / intervalMs);
+
+  // Primeiro pico (lub): subida rápida e decaimento exponencial forte
+  const attack = Math.min(1, tNorm / 0.08);
+  const decayRate = 6.2 - clampedUrgency * 2.4; // decai mais devagar e pulsa mais forte em pânico extremo
+  const primary = attack * Math.exp(-decayRate * Math.max(0, tNorm - 0.04));
+
+  // Segundo eco cardíaco (dub) aos ~24% do ciclo
+  const dubOffset = tNorm - 0.24;
+  const dub =
+    dubOffset >= 0
+      ? Math.min(1, dubOffset / 0.06) *
+        0.58 *
+        Math.exp(-(decayRate + 1.4) * Math.max(0, dubOffset - 0.02))
+      : 0;
+
+  return Math.max(0, Math.min(1, Math.max(primary, dub) * (0.68 + clampedUrgency * 0.32)));
+}
+
 export function computeDollyZoomFov(
   newbornDist: number,
   newbornVisible: boolean,
-  state: NewbornAIState
+  state: NewbornAIState,
+  health: HealthState = "verde"
 ): number {
-  if (!newbornVisible) return PHYSICS_PARAMS.defaultFov;
-  if (state === "Hunt") return PHYSICS_PARAMS.dollyZoomFov;
-  if (state === "Observe" || state === "Investigate") {
-    const t = Math.max(0, Math.min(1, (11 - newbornDist) / 8));
-    return PHYSICS_PARAMS.defaultFov - t * (PHYSICS_PARAMS.defaultFov - 56);
+  if (!newbornVisible) {
+    return health === "vermelho" ? PHYSICS_PARAMS.defaultFov - 2 : PHYSICS_PARAMS.defaultFov;
   }
-  return PHYSICS_PARAMS.defaultFov;
+  const injuryBonus = health === "vermelho" ? 4 : 0;
+  if (state === "Hunt") return PHYSICS_PARAMS.dollyZoomFov - injuryBonus;
+  if (state === "Observe" || state === "Investigate") {
+    const t = Math.max(0, Math.min(1, (12 - newbornDist) / 9));
+    return (
+      PHYSICS_PARAMS.defaultFov -
+      t * (PHYSICS_PARAMS.defaultFov - (55 - injuryBonus * 0.75))
+    );
+  }
+  return PHYSICS_PARAMS.defaultFov - (health === "vermelho" ? 2 : 0);
+}
+
+export interface PanicMetricsInput {
+  health: HealthState;
+  newbornDist: number;
+  newbornVisible: boolean;
+  newbornState: NewbornAIState;
+  batteryPct: number;
+  flashlightOn: boolean;
+  hidingInLocker: boolean;
+  holdingBreath: boolean;
+}
+
+export interface PanicMetricsResult {
+  panicLevel: number;
+  estimatedBpm: number;
+  radialBlurStrength: number;
+  lensDistortion: number;
+}
+
+export function computePanicMetrics(
+  input: PanicMetricsInput
+): PanicMetricsResult {
+  const proxFactor = input.newbornVisible
+    ? Math.max(0, Math.min(1, (14 - input.newbornDist) / 11.5))
+    : Math.max(0, Math.min(0.35, (10 - input.newbornDist) / 14));
+
+  const stateBoost =
+    input.newbornState === "Hunt"
+      ? 0.42
+      : input.newbornState === "Investigate"
+        ? 0.24
+        : input.newbornState === "Observe" && input.newbornVisible
+          ? 0.14
+          : 0;
+
+  const injuryBoost = input.health === "vermelho" ? 0.36 : 0;
+  const lowBatteryBoost =
+    input.flashlightOn && input.batteryPct <= 15 ? 0.12 : 0;
+  const lockerRelief = input.hidingInLocker && input.holdingBreath ? -0.1 : 0;
+
+  const panicLevel = Math.max(
+    0.05,
+    Math.min(
+      1.0,
+      proxFactor * 0.55 + stateBoost + injuryBoost + lowBatteryBoost + lockerRelief
+    )
+  );
+
+  const estimatedBpm = Math.round(68 + panicLevel * 116);
+
+  const detected =
+    input.newbornVisible &&
+    (input.newbornState === "Hunt" || input.newbornState === "Investigate");
+
+  const radialBlurStrength = Math.max(
+    0,
+    Math.min(
+      1.0,
+      (detected ? 0.45 + proxFactor * 0.35 : proxFactor * 0.18) +
+        (input.health === "vermelho" ? 0.28 : 0)
+    )
+  );
+
+  const lensDistortion = Math.max(
+    0,
+    Math.min(
+      1.0,
+      (detected ? 0.35 + proxFactor * 0.3 : proxFactor * 0.12) +
+        (input.health === "vermelho" ? 0.35 : 0)
+    )
+  );
+
+  return {
+    panicLevel,
+    estimatedBpm,
+    radialBlurStrength,
+    lensDistortion,
+  };
 }
 
 // Perímetro claustrofóbico padrão: largura interna ~18.4m (-9.2..9.2), corredores centrais de 2.8m a 3.2m

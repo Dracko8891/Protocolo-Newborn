@@ -7,7 +7,9 @@ import {
   PHYSICS_PARAMS,
   addItemToInventory,
   computeDollyZoomFov,
+  computeExponentialHeartbeatPulse,
   computeHeartbeatIntervalMs,
+  computePanicMetrics,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
@@ -15,6 +17,7 @@ import {
   validateKeypadCode,
   validateRelayPuzzle,
 } from "./gameLogic";
+import { panicLogger } from "./panicLogger";
 
 test("Jogador spawna em caminho aberto na Sala de Segurança sem colidir com o balcão", () => {
   const spawn = resolveCircleWallCollision(
@@ -178,11 +181,67 @@ test("Todos os 7 capítulos possuem spawn livre de colisão, PIN único e nós d
   }
 });
 
-test("Batimento cardíaco acelera e FOV Dolly Zoom comprime quando o Newborn se aproxima ou caça", () => {
+test("Batimento cardíaco acelera, Dolly Zoom comprime e desfoque radial aumenta quando detectado ou ferido", () => {
   assert.ok(computeHeartbeatIntervalMs(2.0) < computeHeartbeatIntervalMs(15.0));
-  assert.equal(computeDollyZoomFov(12, false, "Patrol"), 64);
-  assert.equal(computeDollyZoomFov(8, true, "Hunt"), 54);
-  assert.ok(computeDollyZoomFov(4, true, "Observe") < 64);
+  const peakEarly = computeExponentialHeartbeatPulse(50, 600, 0.9);
+  const decayMid = computeExponentialHeartbeatPulse(300, 600, 0.9);
+  const decayLate = computeExponentialHeartbeatPulse(560, 600, 0.9);
+  assert.ok(peakEarly > decayMid && decayMid > decayLate);
+  assert.ok(
+    computeExponentialHeartbeatPulse(280, 600, 1.0) >
+      computeExponentialHeartbeatPulse(280, 600, 0.1)
+  );
+  assert.equal(computeDollyZoomFov(12, false, "Patrol", "verde"), 64);
+  assert.equal(computeDollyZoomFov(8, true, "Hunt", "verde"), 54);
+  assert.equal(computeDollyZoomFov(8, true, "Hunt", "vermelho"), 50);
+  assert.ok(computeDollyZoomFov(4, true, "Observe", "verde") < 64);
+
+  const calm = computePanicMetrics({
+    health: "verde",
+    newbornDist: 14,
+    newbornVisible: false,
+    newbornState: "Patrol",
+    batteryPct: 90,
+    flashlightOn: false,
+    hidingInLocker: false,
+    holdingBreath: false,
+  });
+  const huntedInjured = computePanicMetrics({
+    health: "vermelho",
+    newbornDist: 3.5,
+    newbornVisible: true,
+    newbornState: "Hunt",
+    batteryPct: 10,
+    flashlightOn: true,
+    hidingInLocker: false,
+    holdingBreath: false,
+  });
+
+  assert.ok(huntedInjured.estimatedBpm > calm.estimatedBpm);
+  assert.ok(huntedInjured.radialBlurStrength > calm.radialBlurStrength);
+  assert.ok(huntedInjured.lensDistortion > calm.lensDistortion);
+
+  const entry = panicLogger.log(
+    {
+      event: "detection_trigger",
+      detail: "Teste unitário",
+      panicPct: Math.round(huntedInjured.panicLevel * 100),
+      heartRateBpm: huntedInjured.estimatedBpm,
+      newbornDistM: 3.5,
+      newbornState: "Hunt",
+      health: "vermelho",
+      resources: {
+        batteryPct: 10,
+        flashlightOn: true,
+        tricorderOn: false,
+        hidingInLocker: false,
+        kitsRemaining: 1,
+      },
+    },
+    true
+  );
+  assert.ok(entry !== null);
+  assert.ok(panicLogger.getRecentEntries().length >= 1);
 });
 
 test("Pré-carregamento assíncrono de recursos conclui com status ready em ambiente headless", async () => {
