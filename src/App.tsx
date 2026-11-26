@@ -114,7 +114,10 @@ export default function App() {
   const [photosensitiveMode, setPhotosensitiveMode] = useState(false);
   const [touchControlsEnabled, setTouchControlsEnabled] = useState(() => {
     if (typeof window === "undefined") return false;
-    return localStorage.getItem("vanguard7.touchEnabled") === "1";
+    const saved = localStorage.getItem("vanguard7.touchEnabled");
+    return saved === null
+      ? window.matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0
+      : saved === "1";
   });
   const [touchSensitivity, setTouchSensitivity] = useState(() => {
     if (typeof window === "undefined") return 1.0;
