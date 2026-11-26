@@ -9,6 +9,7 @@ on:
       - "index.html"
       - "package.json"
       - "package-lock.json"
+      - "vite.config.ts"
       - "app/**"
       - "build.gradle.kts"
       - "settings.gradle.kts"
@@ -20,7 +21,9 @@ permissions:
 
 jobs:
   build-apk:
+    name: Build PROTOCOLO NEWBORN APK
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,11 +37,14 @@ jobs:
       - name: Install web dependencies
         run: npm ci
 
-      - name: Build game for local Android assets
+      - name: Build game frontend
+        run: npm run build -- --base=./
+
+      - name: Package game into Android assets
         run: |
-          npm run build -- --base=./
-          mkdir -p app/src/main/assets/web
-          cp -R dist/. app/src/main/assets/web/
+          test -s dist/index.html
+          mkdir -p app/src/main/assets/game
+          cp -R dist/. app/src/main/assets/game/
 
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -46,18 +52,39 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.3.1"
 
+      - name: Create debug signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore debug.keystore -storepass android \
+            -alias androiddebugkey -keypass android \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Android Debug,O=Android,C=US"
+
       - name: Build debug APK
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Verify APK
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          file "$APK"
+          sha256sum "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Protocolo-Newborn-Android-APK
+          name: PROTOCOLO-NEWBORN-Android-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
