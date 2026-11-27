@@ -18,6 +18,13 @@
     color: #f1f5f9;
     font-family: var(--font-sans);
     overflow: hidden;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  [role="button"] {
+    touch-action: manipulation;
   }
 }
 
@@ -39,3 +46,27 @@
     rgba(0, 0, 0, 0.22) 4px
   );
 }
+
+@keyframes subtitle-tremor {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    transform: translate3d(-1.5px, 0.5px, 0);
+  }
+  40% {
+    transform: translate3d(1.5px, -0.5px, 0);
+  }
+  60% {
+    transform: translate3d(-1px, -0.5px, 0);
+  }
+  80% {
+    transform: translate3d(1px, 0.5px, 0);
+  }
+}
+
+.subtitle-panic-tremor {
+  animation: subtitle-tremor 0.28s infinite linear;
+}
+

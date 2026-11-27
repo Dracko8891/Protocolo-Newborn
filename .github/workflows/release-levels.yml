@@ -1,0 +1,62 @@
+name: Release Modular Levels
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag da release no GitHub Releases"
+        required: true
+        default: "levels-v1.0.0"
+  push:
+    branches: [main]
+    paths:
+      - "assets-chapters/**"
+      - "scripts/package_chapters.mjs"
+      - "manifest.json"
+      - ".github/workflows/release-levels.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  package-and-release-levels:
+    name: Package & Publish Modular Chapters (fase_01..07)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Package modular chapters & update manifests
+        run: node scripts/package_chapters.mjs
+
+      - name: Verify zip outputs
+        run: |
+          ls -lh dist-levels/fase_0*.zip
+          test -s manifest.json
+
+      - name: Publish modular zips to GitHub Release levels-v1.0.0
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.release_tag || 'levels-v1.0.0' }}
+          name: "Protocolo Newborn · Pacotes Modulares (v1.0.0)"
+          body: "Pacotes modulares das fases 01 a 07 (modelos Draco/KTX2 e narração PT-BR) para download persistente no APK."
+          files: |
+            dist-levels/fase_01.zip
+            dist-levels/fase_02.zip
+            dist-levels/fase_03.zip
+            dist-levels/fase_04.zip
+            dist-levels/fase_05.zip
+            dist-levels/fase_06.zip
+            dist-levels/fase_07.zip
+            manifest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

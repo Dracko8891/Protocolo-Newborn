@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.content.pm.ActivityInfo
 import android.os.Build
 import android.os.Bundle
+import android.util.Base64
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsController
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -15,10 +17,52 @@ import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.webkit.WebViewAssetLoader
 import androidx.webkit.WebViewClientCompat
+import java.io.File
 
 class MainActivity : ComponentActivity() {
     private lateinit var gameView: WebView
     private lateinit var assetLoader: WebViewAssetLoader
+
+    inner class AndroidLevelBridge {
+        private val levelsRoot: File by lazy {
+            File(filesDir, "levels").apply { if (!exists()) mkdirs() }
+        }
+
+        private fun safeLevelDir(levelId: String): File? {
+            if (!Regex("^fase_0[1-7]$").matches(levelId)) return null
+            return File(levelsRoot, levelId)
+        }
+
+        @JavascriptInterface
+        fun isPersistentStorageReady(): Boolean = levelsRoot.exists() || levelsRoot.mkdirs()
+
+        @JavascriptInterface
+        fun saveLevelZipBase64(levelId: String, base64Zip: String, metadataJson: String): Boolean {
+            val dir = safeLevelDir(levelId) ?: return false
+            return try {
+                if (!dir.exists()) dir.mkdirs()
+                val bytes = Base64.decode(base64Zip, Base64.DEFAULT)
+                File(dir, "$levelId.zip").writeBytes(bytes)
+                File(dir, "meta.json").writeText(metadataJson)
+                true
+            } catch (_: Exception) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun deleteLevelData(levelId: String): Boolean {
+            val dir = safeLevelDir(levelId) ?: return false
+            return if (dir.exists()) dir.deleteRecursively() else true
+        }
+
+        @JavascriptInterface
+        fun getStoredLevelBytes(levelId: String): Long {
+            val dir = safeLevelDir(levelId) ?: return 0L
+            val zip = File(dir, "$levelId.zip")
+            return if (zip.exists()) zip.length() else 0L
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,6 +77,7 @@ class MainActivity : ComponentActivity() {
             setBackgroundColor(android.graphics.Color.rgb(7, 9, 13))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
+            settings.databaseEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
             settings.allowFileAccess = false
             settings.allowContentAccess = false
@@ -40,6 +85,7 @@ class MainActivity : ComponentActivity() {
             settings.builtInZoomControls = false
             settings.displayZoomControls = false
             settings.javaScriptCanOpenWindowsAutomatically = false
+            addJavascriptInterface(AndroidLevelBridge(), "AndroidLevelBridge")
             webViewClient = object : WebViewClientCompat() {
                 override fun shouldInterceptRequest(
                     view: WebView,

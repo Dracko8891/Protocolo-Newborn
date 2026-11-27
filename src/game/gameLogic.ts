@@ -120,8 +120,8 @@ export function computeHeartbeatIntervalMs(newbornDist: number): number {
 
 /**
  * Curva de suavização (easing) exponencial para o pulso da vinheta de dano durante o heartbeat.
- * Modela um ataque sistólico rápido seguido de decaimento exponencial (e^(-k*t)) + segundo pulso (lub-dub),
- * aumentando a persistência e intensidade conforme a proximidade e o nível de pânico crescem.
+ * Inicia devagar, acelera bruscamente via Math.exp() até o pico sistólico ("lub") e decai
+ * exponencialmente com um eco diastólico ("dub"), intensificando a urgência perto do Newborn.
  */
 export function computeExponentialHeartbeatPulse(
   elapsedSinceBeatMs: number,
@@ -132,21 +132,34 @@ export function computeExponentialHeartbeatPulse(
   const clampedUrgency = Math.max(0, Math.min(1, urgency));
   const tNorm = Math.min(1, elapsedSinceBeatMs / intervalMs);
 
-  // Primeiro pico (lub): subida rápida e decaimento exponencial forte
-  const attack = Math.min(1, tNorm / 0.08);
-  const decayRate = 6.2 - clampedUrgency * 2.4; // decai mais devagar e pulsa mais forte em pânico extremo
-  const primary = attack * Math.exp(-decayRate * Math.max(0, tNorm - 0.04));
+  // Pico principal (lub): subida lenta que acelera bruscamente até peakAt
+  const peakAt = 0.22 - clampedUrgency * 0.05;
+  const riseSharpness = 4.4 + clampedUrgency * 2.4;
+  const releaseDecay = 6.6 - clampedUrgency * 2.2;
 
-  // Segundo eco cardíaco (dub) aos ~24% do ciclo
-  const dubOffset = tNorm - 0.24;
-  const dub =
-    dubOffset >= 0
-      ? Math.min(1, dubOffset / 0.06) *
-        0.58 *
-        Math.exp(-(decayRate + 1.4) * Math.max(0, dubOffset - 0.02))
-      : 0;
+  let primary = 0;
+  if (tNorm <= peakAt) {
+    const u = Math.max(0, tNorm / peakAt);
+    primary = (Math.exp(riseSharpness * u) - 1) / (Math.exp(riseSharpness) - 1);
+  } else {
+    primary = Math.exp(-releaseDecay * (tNorm - peakAt));
+  }
 
-  return Math.max(0, Math.min(1, Math.max(primary, dub) * (0.68 + clampedUrgency * 0.32)));
+  // Segundo pulso cardíaco (dub) com subida exponencial e decaimento rápido
+  const dubStart = peakAt + 0.12;
+  const dubPeak = dubStart + 0.09;
+  let dub = 0;
+  if (tNorm >= dubStart) {
+    if (tNorm <= dubPeak) {
+      const u2 = (tNorm - dubStart) / (dubPeak - dubStart);
+      dub = 0.58 * ((Math.exp(3.8 * u2) - 1) / (Math.exp(3.8) - 1));
+    } else {
+      dub = 0.58 * Math.exp(-(releaseDecay + 1.5) * (tNorm - dubPeak));
+    }
+  }
+
+  const amplitude = 0.65 + clampedUrgency * 0.35;
+  return Math.max(0, Math.min(1, Math.max(primary, dub) * amplitude));
 }
 
 export function computeDollyZoomFov(
@@ -1058,4 +1071,82 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
     detectedBy: "none",
     veinsColor: "off",
   };
+}
+
+export type ControlMode = "auto" | "touch" | "keyboard";
+
+export interface TouchDeviceSignals {
+  savedPreference: string | null;
+  forceQueryParam?: boolean;
+  hostname?: string;
+  userAgent?: string;
+  pointerCoarse?: boolean;
+  anyPointerCoarse?: boolean;
+  maxTouchPoints?: number;
+  hasOnTouchStart?: boolean;
+}
+
+/**
+ * Detecta smartphones e tablets (incluindo iPadOS / tablets que reportam User-Agent "Macintosh"
+ * mas possuem maxTouchPoints > 1) e WebView do APK Android.
+ */
+export function isMobileOrTabletDevice(
+  signals: Omit<TouchDeviceSignals, "savedPreference">
+): boolean {
+  const isAndroidApkHost =
+    signals.hostname === "appassets.androidplatform.net";
+  const ua = signals.userAgent ?? "";
+  const isMobileOrTabletUa =
+    /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Tablet|PlayBook|Silk/i.test(
+      ua
+    );
+  const isIpadDesktopUa =
+    /Macintosh/i.test(ua) && (signals.maxTouchPoints ?? 0) > 1;
+
+  return Boolean(
+    isAndroidApkHost ||
+      isMobileOrTabletUa ||
+      isIpadDesktopUa ||
+      signals.pointerCoarse ||
+      signals.anyPointerCoarse ||
+      (signals.maxTouchPoints ?? 0) > 0 ||
+      signals.hasOnTouchStart
+  );
+}
+
+/**
+ * Resolve o modo de controles efetivo ("touch" ativo ou "teclado e mouse").
+ */
+export function resolveTouchControlsActive(
+  mode: ControlMode,
+  signals: Omit<TouchDeviceSignals, "savedPreference">
+): boolean {
+  if (signals.forceQueryParam) return true;
+  if (mode === "touch") return true;
+  if (mode === "keyboard") return false;
+  return isMobileOrTabletDevice(signals);
+}
+
+/**
+ * Determina se os controles Touch devem iniciar ativos.
+ * No APK Android (WebView em appassets.androidplatform.net ou Android UA) e em dispositivos
+ * móveis/tablets/touchscreen, ativa automaticamente a camada touch mesmo que matchMedia(pointer: coarse)
+ * retorne falso na WebView.
+ */
+export function shouldEnableTouchControlsByDefault(
+  signals: TouchDeviceSignals
+): boolean {
+  if (signals.forceQueryParam) return true;
+
+  const isAndroidApkHost =
+    signals.hostname === "appassets.androidplatform.net";
+
+  if (signals.savedPreference === "touch" || signals.savedPreference === "1") {
+    return true;
+  }
+  if (signals.savedPreference === "keyboard" || signals.savedPreference === "0") {
+    return isAndroidApkHost;
+  }
+
+  return isMobileOrTabletDevice(signals);
 }

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { ChapterConfig, PHYSICS_PARAMS } from "./gameLogic";
+import { getChapterAssetBlobUrl } from "./levelStorage";
 import {
   buildBeamConeTexture,
   buildCeilingGrateTexture,
@@ -9,6 +10,7 @@ import {
   buildNewbornSkinMaps,
   buildTricorderScreenTexture,
   buildWallPanelTexture,
+  configureAssetLoaders,
   loadGlbModelOrFallback,
 } from "./resourceCache";
 
@@ -624,7 +626,9 @@ export function buildChapterScene(
   }
   scene.add(keyLight);
 
-  // Giroflex / Farol temático do capítulo
+  configureAssetLoaders(renderer);
+
+  // Giroflex / Farol temático do capítulo + cone volumétrico atmosférico no teto
   const beaconColorMap: Record<ChapterConfig["palette"], number> = {
     medical: 0xdc2626,
     atrium: 0x0284c7,
@@ -635,21 +639,34 @@ export function buildChapterScene(
     hangar: 0xf59e0b,
   };
   const beaconColor = beaconColorMap[chapter.palette];
-  const beaconLight = new THREE.PointLight(beaconColor, 2.8, 12, 2.0);
+  const beaconLight = new THREE.PointLight(beaconColor, 3.1, 13, 1.9);
   beaconLight.position.set(0, CEIL_H - 0.28, 4.4);
   scene.add(beaconLight);
 
-  const beaconGeo = new THREE.CylinderGeometry(0.11, 0.13, 0.18, 10);
+  const beaconGeo = new THREE.CylinderGeometry(0.11, 0.13, 0.18, 12);
   const beaconMat = new THREE.MeshStandardMaterial({
     color: beaconColor,
     emissive: beaconColor,
-    emissiveIntensity: 2.2,
-    roughness: 0.2,
+    emissiveIntensity: 2.4,
+    roughness: 0.18,
   });
   const beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
   beaconMesh.position.set(0, CEIL_H - 0.1, 4.4);
   scene.add(beaconMesh);
-  disposables.push(beaconGeo, beaconMat);
+
+  const beaconConeGeo = new THREE.ConeGeometry(1.45, 2.35, 18, 1, true);
+  const beaconConeMat = new THREE.MeshBasicMaterial({
+    color: beaconColor,
+    transparent: true,
+    opacity: isSoftwareGl ? 0.04 : 0.075,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const beaconCone = new THREE.Mesh(beaconConeGeo, beaconConeMat);
+  beaconCone.position.set(0, CEIL_H - 1.28, 4.4);
+  scene.add(beaconCone);
+  disposables.push(beaconGeo, beaconMat, beaconConeGeo, beaconConeMat);
 
   // Fluorescente piscando no setor norte + Cabo elétrico soltando faíscas
   const flickerLight = new THREE.PointLight(0xbae6fd, 1.0, 9.5, 2.0);
@@ -1276,12 +1293,19 @@ export function buildChapterScene(
     z: chapter.exitPos.z - 0.4,
     mesh: exitDoorGroup,
   });
+  // Barra luminosa tática na comporta para leitura no breu
+  const exitLampGeo = new THREE.BoxGeometry(1.6, 0.08, 0.14);
+  const exitLamp = new THREE.Mesh(exitLampGeo, exitDoorLightMat);
+  exitLamp.position.set(0, CEIL_H - 0.38, -0.22);
+  exitDoorGroup.add(exitLamp);
+
   disposables.push(
     frameSideGeo,
     frameTopGeo,
     doorGeo,
     barGeo,
     padGeo,
+    exitLampGeo,
     exitDoorMat,
     exitDoorLightMat
   );
@@ -1292,6 +1316,36 @@ export function buildChapterScene(
   scene.add(newborn.root);
 
   const viewmodel = attachFirstPersonViewmodel(camera, disposables);
+
+  // Carregamento assíncrono de modelos .glb (Draco/KTX2) do pacote modular salvo no dispositivo
+  let activeDisposed = false;
+  let downloadedPropUrl: string | null = null;
+  disposables.push({
+    dispose: () => {
+      activeDisposed = true;
+      if (downloadedPropUrl) {
+        URL.revokeObjectURL(downloadedPropUrl);
+        downloadedPropUrl = null;
+      }
+    },
+  });
+
+  void getChapterAssetBlobUrl(chapter.id, ".glb").then(async (blobUrl) => {
+    if (!blobUrl || activeDisposed) {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      return;
+    }
+    downloadedPropUrl = blobUrl;
+    const glbProps = await loadGlbModelOrFallback(
+      `chapter_props_${chapter.id}`,
+      blobUrl,
+      renderer
+    );
+    if (glbProps && !activeDisposed) {
+      glbProps.position.set(0, 0, 4.4);
+      scene.add(glbProps);
+    }
+  });
 
   return {
     newborn,

@@ -3,6 +3,7 @@ import { Cpu, X, Zap } from "lucide-react";
 import { RelayState, validateRelayPuzzle } from "../game/gameLogic";
 
 interface RelayPuzzleModalProps {
+  sectorName?: string;
   tricorderUsed: boolean;
   relayState: RelayState;
   onScanWithTricorder: () => void;
@@ -22,6 +23,7 @@ const COLOR_OPTIONS: Array<{
 ];
 
 export const RelayPuzzleModal: React.FC<RelayPuzzleModalProps> = ({
+  sectorName = "Setor Atual",
   tricorderUsed,
   relayState,
   onScanWithTricorder,
@@ -66,7 +68,7 @@ export const RelayPuzzleModal: React.FC<RelayPuzzleModalProps> = ({
               Engenharia Vanguard-7 · Painel Auxiliar
             </p>
             <h2 className="font-display text-xl font-bold text-slate-100">
-              Roteamento de Relés da Ala Médica
+              Roteamento de Relés · {sectorName}
             </h2>
           </div>
           <button

@@ -6,7 +6,10 @@ on:
     branches: [main]
     paths:
       - "src/**"
+      - "public/**"
       - "index.html"
+      - "manifest.json"
+      - "narration_manifest.json"
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"

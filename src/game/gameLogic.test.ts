@@ -14,10 +14,16 @@ import {
   findNextNavWaypoint,
   hasWallLineOfSight,
   resolveCircleWallCollision,
+  resolveTouchControlsActive,
+  shouldEnableTouchControlsByDefault,
   validateKeypadCode,
   validateRelayPuzzle,
 } from "./gameLogic";
+import { parseLevelsManifest } from "./manifestTypes";
+import { NarrationManager } from "./narrationManager";
+import { parseNarrationManifest, shouldPreemptCue } from "./narrationManifest";
 import { panicLogger } from "./panicLogger";
+import { SoundEngine } from "./soundEngine";
 
 test("Jogador spawna em caminho aberto na Sala de Segurança sem colidir com o balcão", () => {
   const spawn = resolveCircleWallCollision(
@@ -161,18 +167,31 @@ test("NavMesh BFS encontra desvio pela porta da Triagem em vez de atravessar par
   assert.ok(waypoint.x <= -3.7);
 });
 
-test("Todos os 7 capítulos possuem spawn livre de colisão, PIN único e nós de navegação", () => {
+test("Todos os 7 capítulos possuem spawn, pickups, armários e saídas livres de bloqueio", () => {
   const pins = new Set<string>();
   for (const id of [1, 2, 3, 4, 5, 6, 7] as ChapterId[]) {
     const ch = CHAPTER_CONFIGS[id];
-    const resolved = resolveCircleWallCollision(
-      ch.spawn.x,
-      ch.spawn.z,
-      PHYSICS_PARAMS.playerRadius,
-      ch.walls
-    );
-    assert.equal(resolved.x, ch.spawn.x);
-    assert.equal(resolved.z, ch.spawn.z);
+    const checkPoints = [
+      ch.spawn,
+      ch.kitPos,
+      ch.badgePos,
+      { x: ch.lockerPos.hideX, z: ch.lockerPos.hideZ },
+      { x: ch.relayPos.x, z: ch.relayPos.z - 0.5 },
+      { x: ch.exitPos.x, z: ch.exitPos.z - 0.5 },
+      ...ch.navNodes,
+    ];
+    for (const pt of checkPoints) {
+      const resolved = resolveCircleWallCollision(
+        pt.x,
+        pt.z,
+        PHYSICS_PARAMS.playerRadius,
+        ch.walls
+      );
+      assert.ok(
+        Math.hypot(resolved.x - pt.x, resolved.z - pt.z) < 0.05,
+        `Ponto (${pt.x}, ${pt.z}) colidiu no Cap. ${id}`
+      );
+    }
     assert.equal(validateKeypadCode(ch.expectedPin, ch.expectedPin), true);
     assert.equal(validateKeypadCode("0000", ch.expectedPin), false);
     assert.ok(ch.navNodes.length >= 8);
@@ -181,12 +200,14 @@ test("Todos os 7 capítulos possuem spawn livre de colisão, PIN único e nós d
   }
 });
 
-test("Batimento cardíaco acelera, Dolly Zoom comprime e desfoque radial aumenta quando detectado ou ferido", () => {
+test("Batimento cardíaco começa lento, acelera bruscamente no pico, Dolly Zoom comprime e desfoque radial aumenta", () => {
   assert.ok(computeHeartbeatIntervalMs(2.0) < computeHeartbeatIntervalMs(15.0));
-  const peakEarly = computeExponentialHeartbeatPulse(50, 600, 0.9);
-  const decayMid = computeExponentialHeartbeatPulse(300, 600, 0.9);
-  const decayLate = computeExponentialHeartbeatPulse(560, 600, 0.9);
-  assert.ok(peakEarly > decayMid && decayMid > decayLate);
+  const slowStart = computeExponentialHeartbeatPulse(24, 600, 0.9);
+  const accelMid = computeExponentialHeartbeatPulse(75, 600, 0.9);
+  const sharpPeak = computeExponentialHeartbeatPulse(105, 600, 0.9);
+  const decayLate = computeExponentialHeartbeatPulse(520, 600, 0.9);
+  assert.ok(slowStart < accelMid && accelMid < sharpPeak);
+  assert.ok(sharpPeak > decayLate);
   assert.ok(
     computeExponentialHeartbeatPulse(280, 600, 1.0) >
       computeExponentialHeartbeatPulse(280, 600, 0.1)
@@ -255,4 +276,190 @@ test("Pré-carregamento assíncrono de recursos conclui com status ready em ambi
 });
 
 
+test("Detecção de controles touch ativa automaticamente em Android APK, celulares e tablets/iPadOS", () => {
+  assert.equal(
+    shouldEnableTouchControlsByDefault({
+      savedPreference: null,
+      hostname: "appassets.androidplatform.net",
+      pointerCoarse: false,
+      maxTouchPoints: 0,
+    }),
+    true
+  );
+  assert.equal(
+    shouldEnableTouchControlsByDefault({
+      savedPreference: "0",
+      hostname: "appassets.androidplatform.net",
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Moto G35)",
+    }),
+    true
+  );
+  assert.equal(
+    shouldEnableTouchControlsByDefault({
+      savedPreference: null,
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Moto G35)",
+      anyPointerCoarse: false,
+      pointerCoarse: false,
+    }),
+    true
+  );
+  // iPadOS reportando User-Agent Macintosh com maxTouchPoints > 1
+  assert.equal(
+    resolveTouchControlsActive("auto", {
+      hostname: "localhost",
+      userAgent:
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15",
+      maxTouchPoints: 5,
+    }),
+    true
+  );
+  // Sobrescrita manual em Configurações > Controles
+  assert.equal(
+    resolveTouchControlsActive("keyboard", {
+      userAgent: "Mozilla/5.0 (Linux; Android 14; Pixel Tablet)",
+      maxTouchPoints: 5,
+    }),
+    false
+  );
+  assert.equal(
+    resolveTouchControlsActive("touch", {
+      hostname: "localhost",
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+      maxTouchPoints: 0,
+    }),
+    true
+  );
+  assert.equal(
+    shouldEnableTouchControlsByDefault({
+      savedPreference: null,
+      hostname: "localhost",
+      userAgent: "Mozilla/5.0 (X11; Linux x86_64)",
+      pointerCoarse: false,
+      anyPointerCoarse: false,
+      maxTouchPoints: 0,
+      hasOnTouchStart: false,
+    }),
+    false
+  );
+});
 
+test("Parser de manifest.json valida id, nome, versão, tamanho_mb, url_download e sha256_hash", async () => {
+  const fs = await import("node:fs");
+  const raw = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+  const parsed = parseLevelsManifest(raw);
+  assert.equal(parsed.repositorio, "Dracko8891/Protocolo-Newborn");
+  assert.equal(parsed.niveis.length, 7);
+  for (const nivel of parsed.niveis) {
+    assert.ok(nivel.id.startsWith("fase_0"));
+    assert.ok(nivel.nome.length > 0);
+    assert.ok(nivel["versão"].length > 0);
+    assert.ok(nivel.tamanho_mb > 0);
+    assert.ok(nivel.url_download.includes("Dracko8891/Protocolo-Newborn"));
+    assert.equal(nivel.sha256_hash.length, 64);
+  }
+});
+
+test("narration_manifest.json e public/data/narration_manifest.json contêm todas as cenas, 7 capítulos e gatilhos em PT-BR", async () => {
+  const fs = await import("node:fs");
+  const raw = JSON.parse(fs.readFileSync("narration_manifest.json", "utf8"));
+  const rawData = JSON.parse(fs.readFileSync("public/data/narration_manifest.json", "utf8"));
+  assert.deepEqual(rawData, raw, "public/data/narration_manifest.json deve estar sincronizado com narration_manifest.json");
+  assert.ok(fs.existsSync(".agents/skills/protocolo-newborn-autopilot/SKILL.md"));
+
+  const manifest = parseNarrationManifest(rawData);
+  assert.equal(manifest.idioma, "pt-BR");
+  assert.equal(manifest.personagem, "Arthur Vance");
+  const ids = new Set(manifest.cues.map((c) => c.id));
+
+  const requiredIds = [
+    "title_prologue",
+    "intro_flashback_base",
+    "chapter_01_intro",
+    "chapter_01_victory",
+    "chapter_02_intro",
+    "chapter_02_victory",
+    "chapter_03_intro",
+    "chapter_03_victory",
+    "chapter_04_intro",
+    "chapter_04_victory",
+    "chapter_05_intro",
+    "chapter_05_victory",
+    "chapter_06_intro",
+    "chapter_06_victory",
+    "chapter_07_intro",
+    "chapter_07_victory",
+    "pickup_kit",
+    "pickup_badge",
+    "inspect_badge_pin",
+    "door_locked_no_power",
+    "relay_short_circuit",
+    "relay_solved",
+    "door_unlocked",
+    "newborn_vent_drop",
+    "ambient_distress",
+    "newborn_investigate",
+    "newborn_hunt",
+    "locker_enter",
+    "breath_low",
+    "battery_low",
+    "battery_empty",
+    "player_hurt_red",
+    "player_healed",
+    "gameover_defeat",
+  ];
+  for (const id of requiredIds) {
+    assert.ok(ids.has(id), `Falta fala obrigatória no manifesto: ${id}`);
+  }
+  assert.equal(
+    manifest.cues.filter((c) => c.scope === "base").length,
+    2,
+    "Apenas title_prologue e intro_flashback_base ficam no APK base"
+  );
+});
+
+test("NarrationManager interrompe fala calma com pânico e usa fallback seguro sem áudio", async () => {
+  const fs = await import("node:fs");
+  const raw = JSON.parse(fs.readFileSync("narration_manifest.json", "utf8"));
+  const sound = new SoundEngine();
+  const mgr = new NarrationManager(sound);
+  mgr.loadManifestObject(raw);
+
+  assert.equal(
+    shouldPreemptCue(
+      { cueId: "pickup_kit", priority: 1 },
+      { id: "newborn_hunt", priority: 5 }
+    ),
+    true
+  );
+  assert.equal(
+    shouldPreemptCue(
+      { cueId: "newborn_hunt", priority: 5 },
+      { id: "pickup_kit", priority: 1 }
+    ),
+    false
+  );
+
+  const triggeredCalm = await mgr.trigger("pickup_kit", { chapterId: 1 });
+  assert.equal(triggeredCalm, true);
+  assert.equal(mgr.getActiveSubtitle()?.cueId, "pickup_kit");
+  assert.equal(mgr.getActiveSubtitle()?.usedAudio, false);
+
+  const triggeredPanic = await mgr.trigger("newborn_hunt", { chapterId: 1 });
+  assert.equal(triggeredPanic, true);
+  assert.equal(mgr.getActiveSubtitle()?.cueId, "newborn_hunt");
+  assert.equal(mgr.getActiveSubtitle()?.emotion, "panico");
+
+  sound.updatePhysiology({
+    active: true,
+    dangerLevel: 0.9,
+    breathRatio: 0.2,
+    holdingBreath: false,
+    sprinting: true,
+    injured: true,
+    externalHeartbeatActive: false,
+  });
+  sound.setNarrationDucking(true);
+  sound.setNarrationDucking(false);
+  mgr.clear();
+  assert.equal(mgr.getActiveSubtitle(), null);
+});

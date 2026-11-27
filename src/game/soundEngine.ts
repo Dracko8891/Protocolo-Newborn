@@ -1,12 +1,71 @@
+export interface PhysiologyAudioState {
+  active: boolean;
+  dangerLevel: number; // 0..1
+  breathRatio: number; // 0..1 (1 = full, 0 = exhausted)
+  holdingBreath: boolean;
+  sprinting: boolean;
+  injured: boolean;
+  externalHeartbeatActive: boolean;
+}
+
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   private humOsc: OscillatorNode | null = null;
   private humGain: GainNode | null = null;
+  private ambientMasterGain: GainNode | null = null;
+  private breathNoiseBuffer: AudioBuffer | null = null;
   private muted = false;
+  private ducked = false;
+  private lastBreathAtMs = 0;
+  private lastPhysBeatAtMs = 0;
+  private wasHoldingBreath = false;
+  private gestureListenerAttached = false;
+  private userGestureUnlocked = false;
+
+  private attachGestureUnlock() {
+    if (this.gestureListenerAttached || typeof window === "undefined") return;
+    this.gestureListenerAttached = true;
+    const unlock = () => {
+      this.userGestureUnlocked = true;
+      if (this.ctx && this.ctx.state === "suspended") {
+        this.ctx.resume().catch(() => {});
+      }
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      window.removeEventListener("touchstart", unlock, true);
+    };
+    window.addEventListener("pointerdown", unlock, { capture: true, passive: true });
+    window.addEventListener("keydown", unlock, { capture: true, passive: true });
+    window.addEventListener("touchstart", unlock, { capture: true, passive: true });
+  }
+
+  private getAmbientTargetGain(): number {
+    if (this.muted) return 0;
+    return this.ducked ? 0.32 : 1.0;
+  }
+
+  private getOrCreateAmbientBus(ctx: AudioContext): GainNode {
+    if (!this.ambientMasterGain) {
+      const bus = ctx.createGain();
+      bus.gain.value = this.getAmbientTargetGain();
+      bus.connect(ctx.destination);
+      this.ambientMasterGain = bus;
+    }
+    return this.ambientMasterGain;
+  }
 
   private ensureContext(): AudioContext | null {
     if (this.muted) return null;
     if (typeof window === "undefined") return null;
+    this.attachGestureUnlock();
+    const userActivation =
+      typeof navigator !== "undefined"
+        ? (navigator as Navigator & { userActivation?: { hasBeenActive: boolean } })
+            .userActivation
+        : undefined;
+    if (!this.userGestureUnlocked && userActivation && !userActivation.hasBeenActive) {
+      return null;
+    }
     if (!this.ctx) {
       const AudioCtx =
         window.AudioContext ||
@@ -23,8 +82,28 @@ export class SoundEngine {
 
   public setMuted(mute: boolean) {
     this.muted = mute;
-    if (this.humGain && this.ctx) {
-      this.humGain.gain.setTargetAtTime(mute ? 0 : 0.025, this.ctx.currentTime, 0.05);
+    if (this.ctx) {
+      if (this.humGain) {
+        this.humGain.gain.setTargetAtTime(mute ? 0 : 0.025, this.ctx.currentTime, 0.05);
+      }
+      if (this.ambientMasterGain) {
+        this.ambientMasterGain.gain.setTargetAtTime(
+          this.getAmbientTargetGain(),
+          this.ctx.currentTime,
+          0.06
+        );
+      }
+    }
+  }
+
+  public setNarrationDucking(active: boolean) {
+    this.ducked = active;
+    if (this.ctx && this.ambientMasterGain) {
+      this.ambientMasterGain.gain.setTargetAtTime(
+        this.getAmbientTargetGain(),
+        this.ctx.currentTime,
+        0.12
+      );
     }
   }
 
@@ -35,13 +114,14 @@ export class SoundEngine {
   public startAmbientHum() {
     const ctx = this.ensureContext();
     if (!ctx || this.humOsc) return;
+    const bus = this.getOrCreateAmbientBus(ctx);
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sine";
     osc.frequency.value = 58;
     gain.gain.value = this.muted ? 0 : 0.025;
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(bus);
     osc.start();
     this.humOsc = osc;
     this.humGain = gain;
@@ -274,7 +354,7 @@ export class SoundEngine {
       gain.gain.value = 0.045;
       src.connect(filter);
       filter.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(this.getOrCreateAmbientBus(ctx));
       src.start(now);
     }
   }
@@ -315,11 +395,95 @@ export class SoundEngine {
     });
   }
 
+  private getBreathBuffer(ctx: AudioContext): AudioBuffer {
+    if (this.breathNoiseBuffer && this.breathNoiseBuffer.sampleRate === ctx.sampleRate) {
+      return this.breathNoiseBuffer;
+    }
+    const len = Math.floor(ctx.sampleRate * 1.4);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const white = Math.random() * 2 - 1;
+      last = (last + 0.06 * white) / 1.06;
+      data[i] = last * 2.8;
+    }
+    this.breathNoiseBuffer = buf;
+    return buf;
+  }
+
+  public playBreathCycle(intensity: number, isGasp = false) {
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const clamped = Math.max(0.1, Math.min(1, intensity));
+    const dur = isGasp ? 0.55 : 0.42 + (1 - clamped) * 0.42;
+    const src = ctx.createBufferSource();
+    src.buffer = this.getBreathBuffer(ctx);
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(isGasp ? 980 : 620 + clamped * 340, now);
+    filter.frequency.linearRampToValueAtTime(isGasp ? 520 : 420 + clamped * 220, now + dur);
+    filter.Q.value = isGasp ? 1.8 : 2.6;
+
+    const gain = ctx.createGain();
+    const peak = (isGasp ? 0.14 : 0.022 + clamped * 0.075) * (this.ducked ? 0.55 : 1);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(peak, now + dur * 0.3);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + dur);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start(now);
+    src.stop(now + dur + 0.02);
+  }
+
+  public updatePhysiology(state: PhysiologyAudioState) {
+    if (!state.active || this.muted) {
+      this.wasHoldingBreath = state.holdingBreath;
+      return;
+    }
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+
+    if (this.wasHoldingBreath && !state.holdingBreath && state.breathRatio < 0.55) {
+      this.playBreathCycle(1.0, true);
+      this.lastBreathAtMs = nowMs;
+    }
+    this.wasHoldingBreath = state.holdingBreath;
+
+    const stress = Math.max(
+      state.dangerLevel,
+      state.injured ? 0.72 : 0,
+      state.sprinting ? 0.55 : 0,
+      1 - state.breathRatio
+    );
+
+    if (!state.holdingBreath) {
+      const breathPeriodMs = Math.round(2150 - stress * 1380);
+      if (nowMs - this.lastBreathAtMs >= breathPeriodMs) {
+        this.lastBreathAtMs = nowMs;
+        this.playBreathCycle(0.18 + stress * 0.82, false);
+      }
+    }
+
+    if (!state.externalHeartbeatActive && (stress >= 0.42 || state.holdingBreath)) {
+      const beatPeriodMs = Math.round(1020 - stress * 560);
+      if (nowMs - this.lastPhysBeatAtMs >= beatPeriodMs) {
+        this.lastPhysBeatAtMs = nowMs;
+        this.playHeartbeat(0.25 + stress * 0.65);
+      }
+    }
+  }
+
   public dispose() {
     this.stopAmbientHum();
     if (this.ctx) {
       this.ctx.close().catch(() => {});
       this.ctx = null;
     }
+    this.ambientMasterGain = null;
+    this.breathNoiseBuffer = null;
   }
 }

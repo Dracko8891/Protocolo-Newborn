@@ -43,18 +43,18 @@ export const CreditsModal: React.FC<CreditsModalProps> = ({ onClose }) => {
       role="dialog"
       aria-modal="true"
       aria-label="Créditos dos Criadores"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#04060a]/92 p-4"
+      className="fixed inset-0 z-40 flex items-center justify-center bg-[#04060a]/94 p-4"
     >
-      <div className="flex max-h-[88vh] w-full max-w-xl flex-col border border-amber-500/45 bg-[#090d14] shadow-2xl">
+      <div className="flex max-h-[88vh] w-full max-w-xl flex-col border border-amber-500/45 bg-[#080c13] shadow-2xl">
         {/* Cabeçalho */}
-        <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5">
+        <div className="flex items-center justify-between border-b border-slate-800/90 px-5 py-3.5">
           <div className="flex items-center gap-2.5">
             <Film className="h-4 w-4 text-amber-400" />
             <div>
-              <h2 className="font-display text-base font-bold tracking-wide text-slate-100">
-                CRÉDITOS · PROTOCOLO NEWBORN
+              <h2 className="font-mono-tabular text-sm font-bold uppercase tracking-[0.18em] text-slate-100">
+                Créditos · Protocolo Newborn
               </h2>
-              <p className="font-mono-tabular text-[10px] uppercase tracking-widest text-slate-400">
+              <p className="font-mono-tabular text-[10px] uppercase tracking-[0.22em] text-slate-400">
                 Complexo Subterrâneo Vanguard-7 · Edição Sobrevivência +18
               </p>
             </div>
@@ -69,44 +69,52 @@ export const CreditsModal: React.FC<CreditsModalProps> = ({ onClose }) => {
           </button>
         </div>
 
-        {/* Rolagem individual um de cada vez */}
+        {/* Rolagem vertical estruturada */}
         <div className="overflow-y-auto px-6 py-5 space-y-5">
-          {/* Responsável pela Ideia Original */}
-          <div className="border-l-2 border-cyan-400 bg-[#0d1420] px-4 py-3.5">
-            <div className="flex items-center gap-2 font-mono-tabular text-[11px] uppercase tracking-widest text-cyan-300">
+          {/* Seção inicial destacada: Ideia Original */}
+          <div className="border border-cyan-500/35 border-l-2 border-l-cyan-400 bg-[#0c131f] px-4 py-3.5">
+            <div className="flex items-center gap-2 font-mono-tabular text-[11px] uppercase tracking-[0.22em] text-cyan-300">
               <Sparkles className="h-3.5 w-3.5" />
-              Ideia Original
+              <span>Ideia Original: Nycollas Gabriel</span>
             </div>
-            <div className="mt-1 font-display text-xl font-bold text-slate-50">
+            <div className="mt-1.5 font-mono-tabular text-lg font-bold tracking-tight text-slate-50">
               Nycollas Gabriel
             </div>
-            <p className="mt-1 text-xs leading-relaxed text-slate-300">
-              Concepção inicial da fuga desesperada sem combate, onde ligar disjuntores para escapar acaba abrindo acesso do Newborn ao mundo exterior.
+            <p className="mt-1 font-mono-tabular text-[11px] leading-relaxed text-slate-300">
+              Concepção original da fuga sem combate, onde religar disjuntores para escapar acaba abrindo passagem para o Newborn alcançar o mundo exterior.
             </p>
           </div>
 
-          {/* Seção estruturada: Equipe de Criação */}
-          <section aria-labelledby="equipe-criacao-heading" className="border-t border-slate-800/80 pt-4">
-            <div className="mb-3 flex items-center justify-between">
+          {/* Seção estruturada em lista vertical: Equipe de Criação */}
+          <section
+            aria-labelledby="equipe-criacao-heading"
+            className="border-t border-slate-800/90 pt-4"
+          >
+            <div className="mb-3 flex items-center justify-between border-b border-slate-800/70 pb-2">
               <h3
                 id="equipe-criacao-heading"
-                className="font-display text-sm font-bold uppercase tracking-wider text-amber-300"
+                className="font-mono-tabular text-xs font-bold uppercase tracking-[0.22em] text-amber-300"
               >
                 Equipe de Criação
               </h3>
-              <span className="font-mono-tabular text-[10px] uppercase tracking-widest text-slate-400">
-                {CREATION_TEAM_ROLES.length} Funções Individuais
+              <span className="font-mono-tabular text-[10px] uppercase tracking-[0.18em] text-slate-400">
+                [{String(CREATION_TEAM_ROLES.length).padStart(2, "0")} Funções]
               </span>
             </div>
 
-            <ul className="space-y-2">
-              {CREATION_TEAM_ROLES.map((item) => (
+            <ul className="divide-y divide-slate-800/60 border border-slate-800/80 bg-[#060910]">
+              {CREATION_TEAM_ROLES.map((item, idx) => (
                 <li
                   key={item.role}
-                  className="flex items-baseline justify-between gap-4 border-b border-slate-800/55 pb-2 font-mono-tabular text-xs"
+                  className="flex flex-col gap-0.5 px-3.5 py-2.5 font-mono-tabular text-xs sm:flex-row sm:items-baseline sm:justify-between sm:gap-4"
                 >
-                  <span className="text-slate-300">{item.role}:</span>
-                  <span className="shrink-0 text-right font-semibold text-amber-300">
+                  <span className="flex items-baseline gap-2.5 text-slate-300">
+                    <span className="text-[10px] tracking-widest text-slate-500">
+                      {String(idx + 1).padStart(2, "0")}
+                    </span>
+                    <span>{item.role}</span>
+                  </span>
+                  <span className="pl-6 text-right font-semibold tracking-wide text-amber-300 sm:shrink-0 sm:pl-0">
                     {item.name}
                   </span>
                 </li>
@@ -115,8 +123,8 @@ export const CreditsModal: React.FC<CreditsModalProps> = ({ onClose }) => {
           </section>
 
           {/* Informações extras e nota de bastidores */}
-          <div className="grid gap-2.5 border border-slate-800 bg-[#070b11] p-3.5 text-[11px] text-slate-300">
-            <div className="flex items-center gap-2 font-mono-tabular text-amber-300/90">
+          <div className="grid gap-2.5 border border-slate-800 bg-[#070b11] p-3.5 font-mono-tabular text-[11px] text-slate-300">
+            <div className="flex items-center gap-2 text-amber-300/90">
               <Smartphone className="h-3.5 w-3.5 shrink-0" />
               <span>Plataformas: WebGL 3D em Tempo Real · Otimizado Touch / Mobile Android</span>
             </div>
@@ -133,7 +141,7 @@ export const CreditsModal: React.FC<CreditsModalProps> = ({ onClose }) => {
           <button
             type="button"
             onClick={onClose}
-            className="border border-amber-500/60 bg-amber-500/15 px-4 py-1.5 text-xs font-semibold text-amber-200 hover:bg-amber-500/25"
+            className="border border-amber-500/60 bg-amber-500/15 px-4 py-1.5 font-mono-tabular text-xs font-semibold uppercase tracking-wider text-amber-200 hover:bg-amber-500/25"
           >
             Fechar
           </button>

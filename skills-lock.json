@@ -1,0 +1,75 @@
+{
+  "version": 2,
+  "skills": {
+    "blender-core": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-core/SKILL.md",
+      "computedHash": "edf8f6757070df97c95bbb2168c35634b4d2145024481977885ab786abfea9bd"
+    },
+    "blender-export-pipelines": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-export-pipelines/SKILL.md",
+      "computedHash": "b710f0153a9aa981ce87643273b0f5bd5c81e0370428758ce2af9bdb29f82b22"
+    },
+    "blender-pipeline-automation": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-pipeline-automation/SKILL.md",
+      "computedHash": "1f951958b1bed162898a549525cd2aab347a4c0e96088388be8da0f950725fa5"
+    },
+    "blender-rendering": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-rendering/SKILL.md",
+      "computedHash": "64d155a6855fb3f541482e6c83da80f5e126e999a96cb8627bda28009f207d55"
+    },
+    "blender-scene-setup": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-scene-setup/SKILL.md",
+      "computedHash": "f0acc574b24078d6226241f65039e66825cc74f92db6b4968d9782710e134842"
+    },
+    "blender-workflow-recipes": {
+      "source": "EL4CTEO/blender-skills",
+      "commit": "15cebb2dc94a0c77bef2d9a5e6e378138488dcf7",
+      "sourceType": "github",
+      "skillPath": "skills/blender-workflow-recipes/SKILL.md",
+      "computedHash": "ddc4f1e2a5bae3bed86c2142d99a290515469542c690700a6f37b81c15243671"
+    },
+    "router": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "commit": "c6ca6c41c839b68319ffc08430b99ab768debc32",
+      "sourceType": "github",
+      "skillPath": "router/SKILL.md",
+      "computedHash": "90066d046b8c4d57f3d75471885ed9e6e34c31e87385308929792f2d1ead8374"
+    },
+    "threejs-gltf-loading": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "commit": "c6ca6c41c839b68319ffc08430b99ab768debc32",
+      "sourceType": "github",
+      "skillPath": "skills/web-engines/threejs-gltf-loading/SKILL.md",
+      "computedHash": "62f37032641f7d504b63f43a4b2fbf7a7ef37009461086049c927bd8bfc65c0c"
+    },
+    "threejs-materials-lighting": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "commit": "c6ca6c41c839b68319ffc08430b99ab768debc32",
+      "sourceType": "github",
+      "skillPath": "skills/web-engines/threejs-materials-lighting/SKILL.md",
+      "computedHash": "c9e551ce59c90c4a788c5d848151f28539342b1e4df35e0921c2641dd6088221"
+    },
+    "threejs-scene-setup": {
+      "source": "gamedev-skills/awesome-gamedev-agent-skills",
+      "commit": "c6ca6c41c839b68319ffc08430b99ab768debc32",
+      "sourceType": "github",
+      "skillPath": "skills/web-engines/threejs-scene-setup/SKILL.md",
+      "computedHash": "4a8c3ecad9eaa8d55ca2436c29085960c439a547082ba8586c1e73a528338cb2"
+    }
+  }
+}

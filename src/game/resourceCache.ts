@@ -1,6 +1,10 @@
 import * as THREE from "three";
+import { DRACOLoader, DRACO_GLTF_CONFIG } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { GLTFLoader, GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
-import { ChapterTheme } from "./gameLogic";
+import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
+import { MeshoptDecoder } from "three/examples/jsm/libs/meshopt_decoder.module.js";
+import type { ChapterId, ChapterTheme } from "./gameLogic";
+import type { ChapterDownloadProgress } from "./manifestTypes";
 
 export interface CachedPbrMaps {
   map: THREE.CanvasTexture;
@@ -12,6 +16,7 @@ export interface ResourceCacheSnapshot {
   status: "idle" | "preloading" | "ready";
   progressPct: number;
   cachedKeys: string[];
+  chapterDownloads: Partial<Record<ChapterId, ChapterDownloadProgress>>;
 }
 
 interface ThemeVisualSpec {
@@ -80,14 +85,71 @@ const textureCache: {
   models: Map<string, GLTF>;
   status: "idle" | "preloading" | "ready";
   progressPct: number;
+  chapterDownloads: Partial<Record<ChapterId, ChapterDownloadProgress>>;
 } = {
   walls: {},
   models: new Map(),
   status: "idle",
   progressPct: 0,
+  chapterDownloads: {},
 };
 
 let sharedGltfLoader: GLTFLoader | null = null;
+let sharedDracoLoader: DRACOLoader | null = null;
+let sharedKtx2Loader: KTX2Loader | null = null;
+const cacheSubscribers = new Set<(snap: ResourceCacheSnapshot) => void>();
+
+export function configureAssetLoaders(renderer?: THREE.WebGLRenderer): GLTFLoader {
+  if (!sharedGltfLoader) {
+    sharedGltfLoader = new GLTFLoader();
+    sharedDracoLoader = new DRACOLoader();
+    sharedDracoLoader.setDecoderPath(DRACO_GLTF_CONFIG as unknown as string);
+    sharedGltfLoader.setDRACOLoader(sharedDracoLoader);
+    sharedGltfLoader.setMeshoptDecoder(MeshoptDecoder);
+  }
+  if (renderer && !sharedKtx2Loader) {
+    try {
+      sharedKtx2Loader = new KTX2Loader().detectSupport(renderer);
+      sharedGltfLoader.setKTX2Loader(sharedKtx2Loader);
+    } catch {
+      // KTX2 opcional se WebGL/worker não suportar no ambiente headless
+    }
+  }
+  return sharedGltfLoader;
+}
+
+export function subscribeResourceCache(
+  listener: (snap: ResourceCacheSnapshot) => void
+): () => void {
+  cacheSubscribers.add(listener);
+  listener(getResourceCacheSnapshot());
+  return () => {
+    cacheSubscribers.delete(listener);
+  };
+}
+
+function notifyCacheSubscribers(): void {
+  const snap = getResourceCacheSnapshot();
+  cacheSubscribers.forEach((fn) => fn(snap));
+}
+
+export function setAllChapterDownloadsSnapshot(
+  map: Partial<Record<ChapterId, ChapterDownloadProgress>>
+): void {
+  textureCache.chapterDownloads = { ...map };
+  notifyCacheSubscribers();
+}
+
+export function updateChapterDownloadSnapshot(
+  chapterId: ChapterId,
+  progress: ChapterDownloadProgress
+): void {
+  textureCache.chapterDownloads = {
+    ...textureCache.chapterDownloads,
+    [chapterId]: progress,
+  };
+  notifyCacheSubscribers();
+}
 
 function hash2d(x: number, y: number, seed = 17): number {
   const n = Math.sin(x * 127.1 + y * 311.7 + seed * 74.7) * 43758.5453123;
@@ -428,11 +490,27 @@ export function buildWallPanelTexture(
   rctx.fillStyle = "#e8e8e8";
   rctx.fillRect(0, 416, size, 96);
 
-  // Faixa de contenção do capítulo + listras de advertência desgastadas
+  // Faixa de contenção do capítulo + listras industriais de advertência desgastadas
   ctx.fillStyle = spec.accentHex;
   ctx.fillRect(0, 396, size, 14);
-  rctx.fillStyle = "#626262";
+  rctx.fillStyle = "#525252";
   rctx.fillRect(0, 396, size, 14);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, 386, size, 10);
+  ctx.clip();
+  for (let hx = -32; hx < size + 32; hx += 24) {
+    ctx.fillStyle = "rgba(245, 158, 11, 0.34)";
+    ctx.beginPath();
+    ctx.moveTo(hx, 386);
+    ctx.lineTo(hx + 12, 386);
+    ctx.lineTo(hx + 4, 396);
+    ctx.lineTo(hx - 8, 396);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
 
   // Painéis modulares rebaixados + calhas + rebites de aço
   ctx.strokeStyle = "#080c12";
@@ -819,7 +897,8 @@ export function buildCrtFaceTexture(subliminal = false): THREE.CanvasTexture {
 
 export async function loadGlbModelOrFallback(
   key: string,
-  glbUrl?: string | null
+  glbUrl?: string | null,
+  renderer?: THREE.WebGLRenderer
 ): Promise<THREE.Group | null> {
   const cached = textureCache.models.get(key);
   if (cached) {
@@ -829,10 +908,8 @@ export async function loadGlbModelOrFallback(
     return null;
   }
   try {
-    if (!sharedGltfLoader) {
-      sharedGltfLoader = new GLTFLoader();
-    }
-    const gltf = await sharedGltfLoader.loadAsync(glbUrl);
+    const loader = configureAssetLoaders(renderer);
+    const gltf = await loader.loadAsync(glbUrl);
     gltf.scene.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         obj.castShadow = true;
@@ -866,10 +943,13 @@ export function getResourceCacheSnapshot(): ResourceCacheSnapshot {
   if (textureCache.grimyGlass) cachedKeys.push("grimy_glass");
   if (textureCache.cctvNormal) cachedKeys.push("cctv_feed");
   if (textureCache.cctvSubliminal) cachedKeys.push("cctv_subliminal");
+  if (sharedDracoLoader) cachedKeys.push("draco_decoder_wasm");
+  if (sharedKtx2Loader) cachedKeys.push("ktx2_basis_transcoder");
   return {
     status: textureCache.status,
     progressPct: textureCache.progressPct,
     cachedKeys,
+    chapterDownloads: { ...textureCache.chapterDownloads },
   };
 }
 

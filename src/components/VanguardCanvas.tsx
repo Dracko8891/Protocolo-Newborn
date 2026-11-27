@@ -72,12 +72,17 @@ interface VanguardCanvasProps {
   onAction: (action: GameActionEvent) => void;
   onPlayerHurt: () => void;
   onNewbornVentTriggered: () => void;
+  onGameplayCue?: (cueId: string) => void;
   resetSignal: number;
   mobileInputRef: React.MutableRefObject<{
     moveX: number;
     moveY: number;
     lookX: number;
     lookY: number;
+    holdBreath?: boolean;
+    sprint?: boolean;
+    dynamo?: boolean;
+    touchSensitivity?: number;
   }>;
 }
 
@@ -178,6 +183,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   onAction,
   onPlayerHurt,
   onNewbornVentTriggered,
+  onGameplayCue,
   resetSignal,
   mobileInputRef,
 }) => {
@@ -198,6 +204,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onAction,
     onPlayerHurt,
     onNewbornVentTriggered,
+    onGameplayCue,
   });
 
   stateRef.current = {
@@ -215,6 +222,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onAction,
     onPlayerHurt,
     onNewbornVentTriggered,
+    onGameplayCue,
   };
 
   const simRef = useRef({
@@ -249,6 +257,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     stunTimer: 0,
     jawClickTimer: 0,
     sparkTimer: 0,
+    lowBatteryCued: false,
+    emptyBatteryCued: false,
+    lowBreathCued: false,
   });
 
   useEffect(() => {
@@ -280,10 +291,16 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     s.huntMemoryTimer = 0;
     s.stunTimer = 0;
     s.sparkTimer = 0;
+    s.lowBatteryCued = false;
+    s.emptyBatteryCued = false;
+    s.lowBreathCued = false;
   }, [resetSignal, chapter]);
+
+  const clearInputsRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     if (phase !== "playing" || pausedByModal) {
+      clearInputsRef.current?.();
       if (document.pointerLockElement) {
         document.exitPointerLock?.();
       }
@@ -391,6 +408,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     let draggingLook = false;
     let lastPointerX = 0;
     let lastPointerY = 0;
+    let lookTouchId: number | null = null;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+    const prevPadPressed: boolean[] = [];
     let lastFrameTime = performance.now();
     let telemetryTimer = 0;
     let frameId = 0;
@@ -413,7 +434,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       keysHeld.clear();
       rmbHeld = false;
       draggingLook = false;
+      lookTouchId = null;
     };
+    clearInputsRef.current = clearInputs;
 
     const onKeyDown = (e: KeyboardEvent) => {
       const code = e.code;
@@ -498,6 +521,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           if (near?.id === "locker_xray") {
             simRef.current.hidingInLocker = !simRef.current.hidingInLocker;
             soundEngine.playDoorPneumatic();
+            if (simRef.current.hidingInLocker) {
+              st.onGameplayCue?.("locker_enter");
+            }
             logResourceEvent(
               simRef.current.hidingInLocker ? "Escondeu-se no Armário" : "Saiu do Armário"
             );
@@ -564,6 +590,62 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     const onContextMenu = (e: MouseEvent) => {
       if (stateRef.current.phase === "playing") e.preventDefault();
     };
+
+    const onTouchStart = (e: TouchEvent) => {
+      const st = stateRef.current;
+      if (st.phase !== "playing" || st.pausedByModal) return;
+      if (e.target !== renderer.domElement) return;
+      if (lookTouchId !== null) return;
+      const rightStartX = window.innerWidth * 0.45;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (t && t.clientX >= rightStartX) {
+          lookTouchId = t.identifier;
+          lastTouchX = t.clientX;
+          lastTouchY = t.clientY;
+          break;
+        }
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      const st = stateRef.current;
+      if (st.phase !== "playing" || st.pausedByModal || lookTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (t.identifier === lookTouchId) {
+          const dx = t.clientX - lastTouchX;
+          const dy = t.clientY - lastTouchY;
+          lastTouchX = t.clientX;
+          lastTouchY = t.clientY;
+          const sensScale = mobileInputRef.current.touchSensitivity ?? 1.0;
+          const touchSens = 0.0042 * sensScale;
+          simRef.current.yaw -= dx * touchSens;
+          simRef.current.pitch = THREE.MathUtils.clamp(
+            simRef.current.pitch - dy * touchSens,
+            -1.25,
+            1.25
+          );
+          break;
+        }
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (lookTouchId === null) return;
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === lookTouchId) {
+          lookTouchId = null;
+          break;
+        }
+      }
+    };
+
+    renderer.domElement.style.touchAction = "none";
+    renderer.domElement.addEventListener("touchstart", onTouchStart, { passive: true });
+    renderer.domElement.addEventListener("touchmove", onTouchMove, { passive: true });
+    renderer.domElement.addEventListener("touchend", onTouchEnd, { passive: true });
+    renderer.domElement.addEventListener("touchcancel", onTouchEnd, { passive: true });
 
     window.addEventListener("keydown", onKeyDown);
     window.addEventListener("keyup", onKeyUp);
@@ -772,6 +854,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         if (horrorPass) {
           horrorPass.uniforms.uTime.value = elapsed;
           horrorPass.uniforms.uFear.value = 0.2;
+          horrorPass.uniforms.uRadialBlur.value = 0;
+          horrorPass.uniforms.uLensDistortion.value = 0;
         }
         const tourX = Math.sin(elapsed * 0.25) * 0.9;
         const tourZ = 0.8 + Math.cos(elapsed * 0.2) * 2.0;
@@ -793,6 +877,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
 
       if (st.phase === "intro") {
         world.viewmodel.root.visible = false;
+        if (horrorPass) {
+          horrorPass.uniforms.uRadialBlur.value = 0;
+          horrorPass.uniforms.uLensDistortion.value = 0;
+        }
         camera.position.set(
           s.px,
           s.crouching ? PHYSICS_PARAMS.eyeCrouching : PHYSICS_PARAMS.eyeStanding,
@@ -855,22 +943,54 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       s.hitCooldown = Math.max(0, s.hitCooldown - dt);
       s.stunTimer = Math.max(0, s.stunTimer - dt);
 
-      // Leitura de Gamepad (se conectado)
+      // Leitura de Gamepad (analógicos + botões completos com detecção de borda)
       let gpMoveX = 0;
       let gpMoveY = 0;
       let gpLookX = 0;
       let gpLookY = 0;
       let gpSprint = false;
       let gpBreath = false;
+      let gpDynamo = false;
+      let gpPeekDir = 0;
       const pads = navigator.getGamepads?.() ?? [];
-      const pad = pads[0];
+      const pad = Array.from(pads).find((p) => p && p.connected);
       if (pad) {
-        if (Math.abs(pad.axes[0]) > 0.18) gpMoveX = pad.axes[0];
-        if (Math.abs(pad.axes[1]) > 0.18) gpMoveY = -pad.axes[1];
-        if (Math.abs(pad.axes[2]) > 0.18) gpLookX = pad.axes[2];
-        if (Math.abs(pad.axes[3]) > 0.18) gpLookY = pad.axes[3];
-        gpSprint = Boolean(pad.buttons[10]?.pressed);
+        if (Math.abs(pad.axes[0] ?? 0) > 0.18) gpMoveX = pad.axes[0];
+        if (Math.abs(pad.axes[1] ?? 0) > 0.18) gpMoveY = -pad.axes[1];
+        if (Math.abs(pad.axes[2] ?? 0) > 0.18) gpLookX = pad.axes[2];
+        if (Math.abs(pad.axes[3] ?? 0) > 0.18) gpLookY = pad.axes[3];
+        gpSprint = Boolean(pad.buttons[10]?.pressed) || (pad.buttons[7]?.value ?? 0) > 0.4;
         gpBreath = (pad.buttons[6]?.value ?? 0) > 0.4;
+        gpDynamo = Boolean(pad.buttons[2]?.pressed);
+        gpPeekDir = (pad.buttons[5]?.pressed ? 1 : 0) - (pad.buttons[4]?.pressed ? 1 : 0);
+
+        const justPressed = (idx: number) => {
+          const pressed = Boolean(pad.buttons[idx]?.pressed);
+          const wasPressed = Boolean(prevPadPressed[idx]);
+          prevPadPressed[idx] = pressed;
+          return pressed && !wasPressed;
+        };
+
+        if (justPressed(0)) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyF", bubbles: true }));
+        }
+        if (justPressed(1)) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyC", bubbles: true }));
+        }
+        if (justPressed(3)) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyT", bubbles: true }));
+        }
+        if (justPressed(12)) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyL", bubbles: true }));
+        }
+        if (justPressed(13)) {
+          window.dispatchEvent(new KeyboardEvent("keydown", { code: "KeyH", bubbles: true }));
+        }
+        if (justPressed(9)) {
+          st.onAction({ type: "toggle_pause" });
+        }
+        // Atualiza botões contínuos no array de estado anterior
+        justPressed(2);
       }
 
       const mob = mobileInputRef.current;
@@ -885,7 +1005,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
 
       // Dínamo da lanterna
       s.pumpingDynamo =
-        keysHeld.has("KeyR") && s.batterySec < PHYSICS_PARAMS.maxBatterySec;
+        (keysHeld.has("KeyR") || gpDynamo || Boolean(mob.dynamo)) &&
+        s.batterySec < PHYSICS_PARAMS.maxBatterySec;
       if (s.pumpingDynamo) {
         s.batterySec = Math.min(
           PHYSICS_PARAMS.maxBatterySec,
@@ -901,7 +1022,20 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
 
       if (s.flashlightOn && s.batterySec > 0) {
         s.batterySec = Math.max(0, s.batterySec - dt);
-        if (s.batterySec <= 0) s.flashlightOn = false;
+        if (s.batterySec <= 0) {
+          s.flashlightOn = false;
+          if (!s.emptyBatteryCued) {
+            s.emptyBatteryCued = true;
+            st.onGameplayCue?.("battery_empty");
+          }
+        } else if (s.batterySec <= 36 && !s.lowBatteryCued) {
+          s.lowBatteryCued = true;
+          st.onGameplayCue?.("battery_low");
+        }
+      }
+      if (s.batterySec > 60) {
+        s.lowBatteryCued = false;
+        s.emptyBatteryCued = false;
       }
 
       // Movimento
@@ -919,7 +1053,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       }
 
       const sprinting =
-        (keysHeld.has("ShiftLeft") || keysHeld.has("ShiftRight") || gpSprint) &&
+        (keysHeld.has("ShiftLeft") ||
+          keysHeld.has("ShiftRight") ||
+          gpSprint ||
+          Boolean(mob.sprint)) &&
         mag > 0.2 &&
         !s.crouching &&
         !s.hidingInLocker;
@@ -961,19 +1098,28 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
 
       // Respiração no armário
       s.holdingBreath =
-        s.hidingInLocker && (rmbHeld || gpBreath) && s.breathSec > 0;
+        s.hidingInLocker &&
+        (rmbHeld || gpBreath || Boolean(mob.holdBreath)) &&
+        s.breathSec > 0;
       if (s.holdingBreath) {
         s.breathSec = Math.max(0, s.breathSec - dt);
+        if (s.breathSec <= 2.5 && !s.lowBreathCued) {
+          s.lowBreathCued = true;
+          st.onGameplayCue?.("breath_low");
+        }
       } else {
         s.breathSec = Math.min(
           PHYSICS_PARAMS.maxBreathSec,
           s.breathSec + dt * 1.4
         );
+        if (s.breathSec >= 6.0) {
+          s.lowBreathCued = false;
+        }
       }
 
       // Espiar (Peek Q/E)
       const peekDir =
-        (keysHeld.has("KeyE") ? 1 : 0) - (keysHeld.has("KeyQ") ? 1 : 0);
+        (keysHeld.has("KeyE") ? 1 : 0) - (keysHeld.has("KeyQ") ? 1 : 0) + gpPeekDir;
       const targetHeight = s.hidingInLocker
         ? 1.32
         : s.crouching
@@ -1050,7 +1196,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           const t = Math.min(1, (s.introScriptTimer - 2.5) / 3.2);
           s.nx = THREE.MathUtils.lerp(-1.0, 0.2, t);
           s.nz = THREE.MathUtils.lerp(2.5, 8.2, t);
-          s.ny = t > 0.65 ? (t - 0.65) * 10 : 0;
+          s.ny = t > 0.65 ? Math.min(2.6, (t - 0.65) * 8) : 0;
           world.newborn.root.rotation.y = 0.2;
         }
         world.newborn.root.visible = s.introScriptTimer < 5.7;
@@ -1090,6 +1236,11 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         const prevState = s.newbornState;
         s.newbornState = perc.nextState;
         if (s.newbornState !== prevState) {
+          if (s.newbornState === "Hunt") {
+            st.onGameplayCue?.("newborn_hunt");
+          } else if (s.newbornState === "Investigate" && prevState !== "Hunt") {
+            st.onGameplayCue?.("newborn_investigate");
+          }
           const batteryPct = Math.round((s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100);
           const metrics = computePanicMetrics({
             health: st.health,
@@ -1219,6 +1370,16 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         flashlightOn: s.flashlightOn,
         hidingInLocker: s.hidingInLocker,
         holdingBreath: s.holdingBreath,
+      });
+
+      soundEngine.updatePhysiology({
+        active: true,
+        dangerLevel: panicMetrics.panicLevel,
+        breathRatio: s.breathSec / PHYSICS_PARAMS.maxBreathSec,
+        holdingBreath: s.holdingBreath,
+        sprinting,
+        injured: st.health === "vermelho",
+        externalHeartbeatActive: st.health === "vermelho",
       });
 
       // Dolly Zoom dinâmico (FOV 64° -> 54° / 50° quando detectado ou ferido)
@@ -1387,6 +1548,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("touchstart", onTouchStart);
+      renderer.domElement.removeEventListener("touchmove", onTouchMove);
+      renderer.domElement.removeEventListener("touchend", onTouchEnd);
+      renderer.domElement.removeEventListener("touchcancel", onTouchEnd);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("mousedown", onMouseDown);
@@ -1416,7 +1581,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     <div
       ref={mountRef}
       data-testid="vanguard-3d-viewport"
-      className="fixed inset-0 z-0 w-full h-full bg-[#030509]"
+      className="fixed inset-0 z-0 h-full w-full touch-none bg-[#030509]"
     />
   );
 };
