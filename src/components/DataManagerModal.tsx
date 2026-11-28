@@ -12,7 +12,7 @@ import {
   Volume2,
   X,
 } from "lucide-react";
-import type { ChapterId, ControlMode } from "../game/gameLogic";
+import type { ChapterId, ControlMode, GraphicsPreset } from "../game/gameLogic";
 import {
   ChapterDownloadProgress,
   GameLevelsManifest,
@@ -31,6 +31,12 @@ interface DataManagerModalProps {
   onChangeTouchSensitivity: (val: number) => void;
   photosensitiveMode: boolean;
   onTogglePhotosensitive: (val: boolean) => void;
+  graphicsPreset: GraphicsPreset;
+  onChangeGraphicsPreset: (preset: GraphicsPreset) => void;
+  brightness: number;
+  onChangeBrightness: (val: number) => void;
+  hapticsEnabled: boolean;
+  onToggleHaptics: (val: boolean) => void;
   narrationSettings: NarrationSettings;
   onChangeNarrationSettings: (patch: Partial<NarrationSettings>) => void;
   onDownloadChapter: (chapterId: ChapterId) => void;
@@ -49,6 +55,12 @@ export const DataManagerModal: React.FC<DataManagerModalProps> = ({
   onChangeTouchSensitivity,
   photosensitiveMode,
   onTogglePhotosensitive,
+  graphicsPreset,
+  onChangeGraphicsPreset,
+  brightness,
+  onChangeBrightness,
+  hapticsEnabled,
+  onToggleHaptics,
   narrationSettings,
   onChangeNarrationSettings,
   onDownloadChapter,
@@ -165,6 +177,68 @@ export const DataManagerModal: React.FC<DataManagerModalProps> = ({
                 className="accent-amber-500"
               />
               Modo Fotossensível (sem flashes)
+            </label>
+          </div>
+        </div>
+
+        {/* SEÇÃO 1.2: GRÁFICOS MALI/MOBILE, BRILHO E VIBRAÇÃO TÁTIL */}
+        <div className="mt-4 border border-slate-800 bg-[#070b11] p-4">
+          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-emerald-300">
+            <span>Gráficos &amp; Imersão (Mobile 60 FPS)</span>
+            <span className="font-mono-tabular text-[10px] text-slate-400">
+              Mali-G52 / G57 Ready
+            </span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {(
+              [
+                { id: "auto" as GraphicsPreset, label: "Automático", desc: "Ajuste dinâmico" },
+                { id: "desempenho" as GraphicsPreset, label: "Desempenho", desc: "Máx. FPS / Leve" },
+                { id: "equilibrado" as GraphicsPreset, label: "Equilibrado", desc: "Texturas HD" },
+                { id: "qualidade" as GraphicsPreset, label: "Qualidade", desc: "Sombras + Efeitos" },
+              ] as const
+            ).map((gp) => (
+              <button
+                key={gp.id}
+                type="button"
+                data-graphics-preset={gp.id}
+                onClick={() => onChangeGraphicsPreset(gp.id)}
+                className={`border p-2 text-left transition-colors ${
+                  graphicsPreset === gp.id
+                    ? "border-emerald-400 bg-emerald-950/45 text-emerald-100"
+                    : "border-slate-700/80 bg-[#0b111b] text-slate-300 hover:border-slate-500"
+                }`}
+              >
+                <div className="text-xs font-bold">{gp.label}</div>
+                <div className="text-[10px] text-slate-400">{gp.desc}</div>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-4 border-t border-slate-800/80 pt-3 text-xs text-slate-300">
+            <label className="flex items-center gap-2">
+              <span>Brilho / Gama ({Math.round(brightness * 100)}%)</span>
+              <input
+                type="range"
+                aria-label="Brilho / Gama"
+                min="0.75"
+                max="1.45"
+                step="0.05"
+                value={brightness}
+                onChange={(e) => onChangeBrightness(Number(e.target.value))}
+                className="w-28 accent-emerald-400"
+              />
+            </label>
+
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={hapticsEnabled}
+                onChange={(e) => onToggleHaptics(e.target.checked)}
+                className="accent-emerald-400"
+              />
+              Vibração Tátil (Haptics)
             </label>
           </div>
         </div>

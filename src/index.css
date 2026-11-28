@@ -86,3 +86,38 @@
   animation: subtitle-tremor 0.28s infinite linear;
 }
 
+@keyframes hud-glitch-rgb {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+    text-shadow: -1.5px 0 rgba(239, 68, 68, 0.7), 1.5px 0 rgba(6, 182, 212, 0.7);
+  }
+  25% {
+    transform: translate3d(-1.5px, 0.5px, 0);
+    text-shadow: -2.5px 0 rgba(239, 68, 68, 0.85), 2px 0 rgba(6, 182, 212, 0.85);
+  }
+  50% {
+    transform: translate3d(1.5px, -0.5px, 0);
+    text-shadow: 2px 0 rgba(239, 68, 68, 0.78), -2px 0 rgba(6, 182, 212, 0.78);
+  }
+  75% {
+    transform: translate3d(-0.75px, -0.5px, 0);
+    text-shadow: -2px 0 rgba(239, 68, 68, 0.8), 2.5px 0 rgba(6, 182, 212, 0.8);
+  }
+}
+
+.hud-chromatic-glitch {
+  animation: hud-glitch-rgb 0.18s infinite steps(2, end);
+}
+
+.locker-slits-overlay {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(4, 6, 10, 0.88) 0px,
+    rgba(4, 6, 10, 0.88) 18px,
+    rgba(4, 6, 10, 0.08) 19px,
+    rgba(4, 6, 10, 0.08) 34px
+  );
+  box-shadow: inset 0 0 110px rgba(2, 4, 8, 0.92);
+}
+

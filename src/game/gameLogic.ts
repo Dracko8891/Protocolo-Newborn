@@ -6,6 +6,169 @@ export type NewbornAIState = "Observe" | "Patrol" | "Investigate" | "Hunt" | "St
 
 export type ChapterId = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
+export type DifficultyMode = "historia" | "sobrevivencia" | "extremo";
+
+export type GraphicsPreset = "auto" | "desempenho" | "equilibrado" | "qualidade";
+
+export type IncidentRank = "S" | "A" | "B" | "C";
+
+export type DirectorWavePhase = "patrol" | "pressure" | "vent_retreat";
+
+export interface DifficultyConfig {
+  id: DifficultyMode;
+  label: string;
+  desc: string;
+  newbornSpeedMult: number;
+  sightRangeMult: number;
+  batteryDrainMult: number;
+  ventRetreatSec: number;
+  pressureSec: number;
+  extraHitBuffer: boolean;
+}
+
+export const DIFFICULTY_PARAMS: Record<DifficultyMode, DifficultyConfig> = {
+  historia: {
+    id: "historia",
+    label: "História",
+    desc: "Bateria dura mais, Newborn menos letal e pausas maiores entre rondas.",
+    newbornSpeedMult: 0.82,
+    sightRangeMult: 0.8,
+    batteryDrainMult: 0.65,
+    ventRetreatSec: 12,
+    pressureSec: 22,
+    extraHitBuffer: true,
+  },
+  sobrevivencia: {
+    id: "sobrevivencia",
+    label: "Sobrevivência",
+    desc: "Experiência original balanceada de tensão, furtividade e recursos.",
+    newbornSpeedMult: 1.0,
+    sightRangeMult: 1.0,
+    batteryDrainMult: 1.0,
+    ventRetreatSec: 8,
+    pressureSec: 28,
+    extraHitBuffer: false,
+  },
+  extremo: {
+    id: "extremo",
+    label: "Protocolo Extremo",
+    desc: "Perseguição implacável, percepção aguçada e drenagem intensa da lanterna.",
+    newbornSpeedMult: 1.16,
+    sightRangeMult: 1.2,
+    batteryDrainMult: 1.28,
+    ventRetreatSec: 5,
+    pressureSec: 36,
+    extraHitBuffer: false,
+  },
+};
+
+export interface EffectiveGraphicsConfig {
+  preset: GraphicsPreset;
+  maxDpr: number;
+  shadowsEnabled: boolean;
+  usePostProcessing: boolean;
+  particleDensity: number;
+  textureSize: 256 | 512;
+  envIntensity: number;
+}
+
+export function resolveEffectiveGraphics(
+  preset: GraphicsPreset,
+  isMobileOrTablet: boolean,
+  isSoftwareGl: boolean,
+  autoDowngraded = false
+): EffectiveGraphicsConfig {
+  if (isSoftwareGl) {
+    return {
+      preset,
+      maxDpr: 1.0,
+      shadowsEnabled: false,
+      usePostProcessing: false,
+      particleDensity: 0.5,
+      textureSize: 256,
+      envIntensity: 0.24,
+    };
+  }
+  if (preset === "desempenho" || (preset === "auto" && autoDowngraded)) {
+    return {
+      preset,
+      maxDpr: isMobileOrTablet ? 0.85 : 1.0,
+      shadowsEnabled: false,
+      usePostProcessing: false,
+      particleDensity: 0.45,
+      textureSize: 256,
+      envIntensity: 0.24,
+    };
+  }
+  if (preset === "auto") {
+    return {
+      preset,
+      maxDpr: isMobileOrTablet ? 1.0 : 1.5,
+      shadowsEnabled: !isMobileOrTablet,
+      usePostProcessing: false,
+      particleDensity: isMobileOrTablet ? 0.65 : 0.9,
+      textureSize: isMobileOrTablet ? 256 : 512,
+      envIntensity: 0.26,
+    };
+  }
+  if (preset === "equilibrado") {
+    return {
+      preset,
+      maxDpr: isMobileOrTablet ? 1.0 : 1.5,
+      shadowsEnabled: !isMobileOrTablet,
+      usePostProcessing: false,
+      particleDensity: 0.8,
+      textureSize: 512,
+      envIntensity: 0.28,
+    };
+  }
+  // qualidade
+  return {
+    preset,
+    maxDpr: isMobileOrTablet ? 1.25 : 2.0,
+    shadowsEnabled: true,
+    usePostProcessing: !isMobileOrTablet,
+    particleDensity: 1.0,
+    textureSize: 512,
+    envIntensity: 0.3,
+  };
+}
+
+export interface IncidentReportInput {
+  elapsedSec: number;
+  alertsCount: number;
+  damageHits: number;
+  logsFound: number;
+  difficulty: DifficultyMode;
+}
+
+export interface IncidentReportData extends IncidentReportInput {
+  chapterId: ChapterId;
+  rank: IncidentRank;
+}
+
+export interface ChapterRecord {
+  completed: boolean;
+  bestTimeSec: number;
+  bestRank: IncidentRank;
+  difficulty: DifficultyMode;
+}
+
+export function computeIncidentReportRank(input: IncidentReportInput): IncidentRank {
+  let score = 100;
+  score -= Math.max(0, input.elapsedSec - 135) * 0.14;
+  score -= input.alertsCount * 8;
+  score -= input.damageHits * 20;
+  score += input.logsFound * 7;
+  if (input.difficulty === "extremo") score += 8;
+  else if (input.difficulty === "historia") score -= 6;
+
+  if (score >= 90 && input.damageHits === 0) return "S";
+  if (score >= 74) return "A";
+  if (score >= 54) return "B";
+  return "C";
+}
+
 export type ChapterTheme =
   | "medical"
   | "atrium"
@@ -19,7 +182,7 @@ export interface InventoryItem {
   id: string;
   name: string;
   description: string;
-  category: "consumivel" | "chave";
+  category: "consumivel" | "chave" | "tatico";
   quantity: number;
   inspectable?: boolean;
   inspected?: boolean;
@@ -53,6 +216,33 @@ export interface CorpseProp {
   rotY: number;
 }
 
+export interface ContainmentDoorSpec {
+  id: string;
+  label: string;
+  wall: AABBWall;
+  panelX: number;
+  panelZ: number;
+  durationSec: number;
+}
+
+export interface SoundTrapSpec {
+  id: string;
+  x: number;
+  z: number;
+  radius: number;
+  kind: "glass" | "puddle";
+}
+
+export interface SurvivorLogSpec {
+  id: string;
+  cueId: string;
+  title: string;
+  author: string;
+  text: string;
+  x: number;
+  z: number;
+}
+
 export interface ChapterConfig {
   id: ChapterId;
   shortLabel: string;
@@ -74,6 +264,11 @@ export interface ChapterConfig {
   lockerPos: { x: number; z: number; hideX: number; hideZ: number; rotY: number };
   relayPos: { x: number; z: number };
   exitPos: { x: number; z: number };
+  wallMapPos: { x: number; z: number; rotY: number };
+  decoyPos: { x: number; z: number };
+  containmentDoor: ContainmentDoorSpec;
+  soundTraps: SoundTrapSpec[];
+  survivorLogs: [SurvivorLogSpec, SurvivorLogSpec];
   corpses: CorpseProp[];
   puddles: Array<{ x: number; z: number; r: number; isBlood?: boolean }>;
   logTitle: string;
@@ -299,16 +494,18 @@ export const MEDICAL_WING_WALLS: AABBWall[] = [
   { id: "sec-fr", minX: 1.0, maxX: 2.8, minZ: -1.2, maxZ: -0.9, kind: "glass" },
   { id: "sec-counter", minX: -1.1, maxX: 1.1, minZ: -3.2, maxZ: -2.55, height: 0.52, kind: "desk" },
 
-  // Sala de Triagem (Oeste: X -9.2..-1.5) — entrada em X = -1.5, Z = 3.2..5.5 (corredor central fica 3.0m de largura!)
+  // Sala de Triagem (Oeste: X -9.2..-1.5) — entrada leste em X=-1.5 Z=3.2..5.5 + saída norte em X=-7.8..-5.8 (loop!)
   { id: "tri-south", minX: -9.2, maxX: -1.5, minZ: 1.2, maxZ: 1.6, kind: "wall" },
-  { id: "tri-north", minX: -9.2, maxX: -1.5, minZ: 9.0, maxZ: 9.4, kind: "wall" },
+  { id: "tri-north-w", minX: -9.2, maxX: -7.8, minZ: 9.0, maxZ: 9.4, kind: "wall" },
+  { id: "tri-north-e", minX: -5.8, maxX: -1.5, minZ: 9.0, maxZ: 9.4, kind: "wall" },
   { id: "tri-es", minX: -1.8, maxX: -1.45, minZ: 1.2, maxZ: 3.1, kind: "wall" },
   { id: "tri-en", minX: -1.8, maxX: -1.45, minZ: 5.6, maxZ: 9.4, kind: "wall" },
   { id: "tri-bed", minX: -7.8, maxX: -5.6, minZ: 5.8, maxZ: 7.4, height: 0.72, kind: "desk" },
 
-  // Sala de Raio-X (Leste: X 1.5..9.2) — entrada em X = 1.5, Z = 3.2..5.5
+  // Sala de Raio-X (Leste: X 1.5..9.2) — entrada oeste em X=1.5 Z=3.2..5.5 + saída norte em X=5.8..7.8 (loop!)
   { id: "xray-south", minX: 1.5, maxX: 9.2, minZ: 1.2, maxZ: 1.6, kind: "wall" },
-  { id: "xray-north", minX: 1.5, maxX: 9.2, minZ: 9.0, maxZ: 9.4, kind: "wall" },
+  { id: "xray-north-w", minX: 1.5, maxX: 5.8, minZ: 9.0, maxZ: 9.4, kind: "wall" },
+  { id: "xray-north-e", minX: 7.8, maxX: 9.2, minZ: 9.0, maxZ: 9.4, kind: "wall" },
   { id: "xray-ws", minX: 1.45, maxX: 1.8, minZ: 1.2, maxZ: 3.1, kind: "wall" },
   { id: "xray-wn", minX: 1.45, maxX: 1.8, minZ: 5.6, maxZ: 9.4, kind: "wall" },
   { id: "xray-table", minX: 5.0, maxX: 7.2, minZ: 2.5, maxZ: 3.9, height: 0.72, kind: "desk" },
@@ -377,14 +574,14 @@ export const ENGINEERING_WALLS: AABBWall[] = [
   { id: "eng-turb-e", minX: 5.4, maxX: 9.2, minZ: 1.4, maxZ: 9.4, kind: "wall" },
 ];
 
-// Cap. 6 · Ômega Titânio Negro (labirinto blindado estreito 2.9m)
+// Cap. 6 · Ômega Titânio Negro (chicanas blindadas com rotas circulares laterais de fuga)
 export const OMEGA_WALLS: AABBWall[] = [
   ...outerPerimeter(),
   { id: "omg-desk", minX: -1.1, maxX: 1.1, minZ: -3.2, maxZ: -2.55, height: 0.65, kind: "desk" },
-  // Divisórias blindadas em chicana para linhas de visão curtas
-  { id: "omg-baffle-1", minX: -9.2, maxX: 2.2, minZ: 1.2, maxZ: 1.7, kind: "wall" },
-  { id: "omg-baffle-2", minX: -2.2, maxX: 9.2, minZ: 4.8, maxZ: 5.3, kind: "wall" },
-  { id: "omg-baffle-3", minX: -9.2, maxX: 2.2, minZ: 8.4, maxZ: 8.9, kind: "wall" },
+  // Divisórias blindadas em chicana com passagens laterais para nunca travar o jogador em beco sem saída
+  { id: "omg-baffle-1", minX: -7.2, maxX: 2.2, minZ: 1.2, maxZ: 1.7, kind: "wall" },
+  { id: "omg-baffle-2", minX: -2.2, maxX: 7.2, minZ: 4.8, maxZ: 5.3, kind: "wall" },
+  { id: "omg-baffle-3", minX: -7.2, maxX: 2.2, minZ: 8.4, maxZ: 8.9, kind: "wall" },
 ];
 
 // Cap. 7 · Hangar Fumaça + Exterior Nevado (contêineres criando corredores 3.0m até o portão de carga aberto)
@@ -426,13 +623,16 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
       { x: -1.6, z: 4.4 },
       { x: -4.8, z: 4.4 },
       { x: -7.5, z: 3.2 },
+      { x: -6.8, z: 9.2 },
       { x: 1.6, z: 4.4 },
       { x: 4.8, z: 4.4 },
+      { x: 6.8, z: 9.2 },
       { x: 7.2, z: 6.5 },
     ],
     patrolPoints: [
       { x: 0, z: 8.2 },
       { x: -4.8, z: 4.4 },
+      { x: -6.8, z: 9.2 },
       { x: 0, z: 0.8 },
       { x: 4.8, z: 4.4 },
       { x: 2.8, z: 12.0 },
@@ -445,6 +645,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 7.2, hideX: 7.6, hideZ: 7.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: -1.0, z: 2.2, rotY: Math.PI / 2 },
+    decoyPos: { x: 5.4, z: 6.2 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Central",
+      wall: { id: "cdoor-1", minX: -1.42, maxX: 1.42, minZ: 1.25, maxZ: 1.55, kind: "door" },
+      panelX: -1.0,
+      panelZ: 0.7,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-1a", x: 0, z: 6.5, radius: 0.95, kind: "glass" },
+      { id: "trap-1b", x: -4.6, z: 4.4, radius: 0.9, kind: "puddle" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_1_1",
+        cueId: "chapter_01_log_1",
+        title: "Áudio da Enfermeira Clara · Triagem",
+        author: "Enf. Clara Nogueira",
+        text: "“Se alguém ainda estiver vivo... os cacos no corredor norte denunciam quem corre. Caminhe agachado sobre o vidro.”",
+        x: -3.2,
+        z: 2.6,
+      },
+      {
+        id: "log_1_2",
+        cueId: "chapter_01_log_2",
+        title: "Nota do Paramédico Braga · Raio-X",
+        author: "Téc. Braga",
+        text: "“Deixei uma isca sonora perto da sala de Raio-X. Se a trava central falhar, jogue o alarme pro outro lado e corra.”",
+        x: 3.4,
+        z: 7.4,
+      },
+    ],
     corpses: [
       { x: -3.2, z: 7.8, rotY: 0.5 },
       { x: 0.9, z: 10.6, rotY: -1.1 },
@@ -502,6 +736,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.2, z: 9.2, hideX: 7.7, hideZ: 9.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: -2.0, z: 1.1, rotY: 0 },
+    decoyPos: { x: 4.0, z: 2.4 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Oeste",
+      wall: { id: "cdoor-2", minX: -5.6, maxX: -2.6, minZ: 4.9, maxZ: 5.2, kind: "door" },
+      panelX: -3.1,
+      panelZ: 4.3,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-2a", x: 0, z: 5.4, radius: 1.0, kind: "puddle" },
+      { id: "trap-2b", x: 4.2, z: 5.4, radius: 0.9, kind: "glass" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_2_1",
+        cueId: "chapter_02_log_1",
+        title: "Gravação Criogênica · Turno B",
+        author: "Operador Kael",
+        text: "“Baixamos o nitrogênio do átrio para menos vinte, mas ele continuou caçando pelo som da água congelada.”",
+        x: -4.2,
+        z: 1.8,
+      },
+      {
+        id: "log_2_2",
+        cueId: "chapter_02_log_2",
+        title: "Rádio Congelado · Passarela Leste",
+        author: "Segurança Júlia",
+        text: "“Se precisar ganhar tempo no átrio, puxe a comporta oeste no painel amarelo e dê a volta pelos fundos.”",
+        x: 6.6,
+        z: 10.6,
+      },
+    ],
     corpses: [
       { x: -4.1, z: 2.4, rotY: 2.1 },
       { x: 4.2, z: 8.2, rotY: -0.4 },
@@ -552,6 +820,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 5.8, hideX: 7.6, hideZ: 5.8, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: -1.0, z: 1.8, rotY: Math.PI / 2 },
+    decoyPos: { x: -7.2, z: 4.6 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Alojamentos",
+      wall: { id: "cdoor-3", minX: -1.42, maxX: 1.42, minZ: 5.1, maxZ: 5.4, kind: "door" },
+      panelX: 1.0,
+      panelZ: 4.5,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-3a", x: 0, z: 3.4, radius: 0.9, kind: "glass" },
+      { id: "trap-3b", x: -4.2, z: 8.2, radius: 0.85, kind: "puddle" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_3_1",
+        cueId: "chapter_03_log_1",
+        title: "Diário Dormitório A · Marta",
+        author: "Oficial Marta Solis",
+        text: "“Escutamos ele arrastar algo pesado pelos beliches. Desligamos o aquecedor, mas o cheiro de sangue sempre o traz de volta.”",
+        x: -4.8,
+        z: 1.8,
+      },
+      {
+        id: "log_3_2",
+        cueId: "chapter_03_log_2",
+        title: "Mensagem no PADD · Ala Leste",
+        author: "Técnico Renan",
+        text: "“Se ficar encurralado entre os dormitórios, use as passagens laterais e feche a comporta central atrás de você.”",
+        x: 5.4,
+        z: 1.8,
+      },
+    ],
     corpses: [
       { x: -0.6, z: 6.2, rotY: 1.3 },
       { x: 4.6, z: 10.6, rotY: -2.2 },
@@ -609,6 +911,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.2, z: 6.4, hideX: 7.7, hideZ: 6.4, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: 0, z: 0.5, rotY: 0 },
+    decoyPos: { x: -4.6, z: 10.8 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Bio-00",
+      wall: { id: "cdoor-4", minX: -1.48, maxX: 1.48, minZ: 5.35, maxZ: 5.65, kind: "door" },
+      panelX: -1.0,
+      panelZ: 4.8,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-4a", x: -4.6, z: 5.5, radius: 0.95, kind: "puddle" },
+      { id: "trap-4b", x: 0, z: 7.8, radius: 0.9, kind: "glass" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_4_1",
+        cueId: "chapter_04_log_1",
+        title: "Nota de Campo · Dra. Elena Vance",
+        author: "Dra. Elena Vance",
+        text: "“O vidro do tanque sudoeste rompeu por dentro. Os cacos espalhados são o pior perigo para quem tenta fugir correndo.”",
+        x: -4.6,
+        z: 0.6,
+      },
+      {
+        id: "log_4_2",
+        cueId: "chapter_04_log_2",
+        title: "Relatório Câmara 00 · Biologista Sato",
+        author: "Dr. Kenji Sato",
+        text: "“Quando os relés caem, ele sobe pelos dutos por alguns segundos antes de retornar. Aproveite essas janelas para avançar.”",
+        x: 4.6,
+        z: 10.8,
+      },
+    ],
     corpses: [
       { x: -2.2, z: 5.5, rotY: 0.2 },
       { x: 5.2, z: 7.8, rotY: 2.8 },
@@ -663,6 +999,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 11.4, hideX: 7.6, hideZ: 11.4, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: 0, z: 2.2, rotY: 0 },
+    decoyPos: { x: -3.8, z: 10.6 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Anel Leste",
+      wall: { id: "cdoor-5", minX: 2.2, maxX: 5.4, minZ: 5.35, maxZ: 5.65, kind: "door" },
+      panelX: 2.7,
+      panelZ: 4.8,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-5a", x: -3.8, z: 5.5, radius: 0.95, kind: "puddle" },
+      { id: "trap-5b", x: 0, z: 10.6, radius: 0.95, kind: "glass" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_5_1",
+        cueId: "chapter_05_log_1",
+        title: "Caixa Preta · Eng. Raul Torres",
+        author: "Eng. Chefe Raul Torres",
+        text: "“Se a lanterna começar a piscar forte do nada, não é bateria — ele está prestes a descer pelo duto acima de você.”",
+        x: 3.8,
+        z: 1.2,
+      },
+      {
+        id: "log_5_2",
+        cueId: "chapter_05_log_2",
+        title: "Nota de Manutenção · Anel Oeste",
+        author: "Téc. Fábio Lima",
+        text: "“O reator cria um anel completo. Use o pilar central para cortar a linha de visão e nunca fique sem fôlego.”",
+        x: -3.8,
+        z: 8.8,
+      },
+    ],
     corpses: [
       { x: -3.6, z: 8.2, rotY: 1.5 },
       { x: 3.6, z: 2.8, rotY: -0.9 },
@@ -693,10 +1063,15 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     walls: OMEGA_WALLS,
     navNodes: [
       { x: 0, z: -4.2 },
+      { x: -8.2, z: -0.2 },
+      { x: -8.2, z: 3.0 },
       { x: 5.6, z: -0.6 },
       { x: 5.6, z: 3.0 },
+      { x: 8.2, z: 5.0 },
+      { x: 8.2, z: 7.2 },
       { x: -5.6, z: 3.0 },
       { x: -5.6, z: 6.6 },
+      { x: -8.2, z: 10.4 },
       { x: 5.6, z: 6.6 },
       { x: 5.6, z: 11.0 },
       { x: 0, z: 11.2 },
@@ -717,6 +1092,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 10.6, hideX: 7.6, hideZ: 10.6, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: 2.6, z: -0.2, rotY: 0 },
+    decoyPos: { x: 6.4, z: 3.0 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Titânio",
+      wall: { id: "cdoor-6", minX: 2.2, maxX: 9.2, minZ: 1.25, maxZ: 1.55, kind: "door" },
+      panelX: 2.9,
+      panelZ: 0.7,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-6a", x: 5.2, z: 2.8, radius: 0.9, kind: "puddle" },
+      { id: "trap-6b", x: -5.2, z: 6.4, radius: 0.9, kind: "glass" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_6_1",
+        cueId: "chapter_06_log_1",
+        title: "Registro Diretoria Ômega · Fuga",
+        author: "Seg. Chefe Almeida",
+        text: "“Abrimos passagens nas pontas das chicanas para manutenção. Nunca fique preso num único corredor.”",
+        x: -3.2,
+        z: 3.0,
+      },
+      {
+        id: "log_6_2",
+        cueId: "chapter_06_log_2",
+        title: "Último Desabafo · Bloco Ômega",
+        author: "Pesq. Camila Rocha",
+        text: "“Quando você sangra, cada gota no chão vira um rastro até você. Use o Kit de Estanca antes de tentar hackear a porta.”",
+        x: 3.6,
+        z: 6.6,
+      },
+    ],
     corpses: [
       { x: 5.2, z: 0.4, rotY: -1.6 },
       { x: -4.8, z: 6.6, rotY: 0.4 },
@@ -769,6 +1178,40 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 8.2, hideX: 7.6, hideZ: 8.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
+    wallMapPos: { x: 0, z: 0.4, rotY: 0 },
+    decoyPos: { x: 7.2, z: 2.6 },
+    containmentDoor: {
+      id: "containment_door",
+      label: "Travar Comporta Carga",
+      wall: { id: "cdoor-7", minX: -1.55, maxX: 1.55, minZ: 5.25, maxZ: 5.55, kind: "door" },
+      panelX: -1.1,
+      panelZ: 4.7,
+      durationSec: 6.0,
+    },
+    soundTraps: [
+      { id: "trap-7a", x: -0.7, z: 5.4, radius: 1.0, kind: "puddle" },
+      { id: "trap-7b", x: 0.4, z: 10.6, radius: 0.95, kind: "glass" },
+    ],
+    survivorLogs: [
+      {
+        id: "log_7_1",
+        cueId: "chapter_07_log_1",
+        title: "Transmissão Piloto · Hangar Sul",
+        author: "Piloto Sara Mendes",
+        text: "“A tempestade lá fora já tomou a pista. Se abrir o portão de carga, nada mais vai segurar o que está atrás de você.”",
+        x: 3.4,
+        z: 5.4,
+      },
+      {
+        id: "log_7_2",
+        cueId: "chapter_07_log_2",
+        title: "Caixa Preta · Última Ordem",
+        author: "Comandante Carga",
+        text: "“Todo o complexo colapsou. Esta é sua última chance de sair vivo do Vanguard-7. Não olhe para trás.”",
+        x: -3.2,
+        z: 11.4,
+      },
+    ],
     corpses: [
       { x: -0.9, z: 5.4, rotY: 2.3 },
       { x: 7.1, z: 3.1, rotY: -0.8 },
@@ -1036,6 +1479,7 @@ export interface PerceptionInput {
   playerBleeding: boolean;
   stunTimerSec: number;
   currentState: NewbornAIState;
+  sightRangeMult?: number;
 }
 
 export function evaluateNewbornPerception(input: PerceptionInput): {
@@ -1061,11 +1505,13 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
     };
   }
 
-  const sightRange = input.flashlightOn
-    ? PHYSICS_PARAMS.sightFlashlightOnM
-    : input.roomLit
-      ? PHYSICS_PARAMS.sightFlashlightOffLitM
-      : PHYSICS_PARAMS.sightFlashlightOffDarkM;
+  const mult = input.sightRangeMult ?? 1.0;
+  const sightRange =
+    (input.flashlightOn
+      ? PHYSICS_PARAMS.sightFlashlightOnM
+      : input.roomLit
+        ? PHYSICS_PARAMS.sightFlashlightOffLitM
+        : PHYSICS_PARAMS.sightFlashlightOffDarkM) * mult;
 
   if (input.hasLineOfSight && input.distanceM <= sightRange) {
     return { nextState: "Hunt", detectedBy: "sight", veinsColor: "crimson" };
@@ -1075,7 +1521,7 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
     return { nextState: "Investigate", detectedBy: "sound", veinsColor: "cyan" };
   }
 
-  if (input.playerBleeding && input.distanceM <= 10.0) {
+  if (input.playerBleeding && input.distanceM <= 10.0 * mult) {
     return { nextState: "Investigate", detectedBy: "scent", veinsColor: "cyan" };
   }
 
@@ -1088,6 +1534,67 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
     detectedBy: "none",
     veinsColor: "off",
   };
+}
+
+export function computeStealthExposurePct(input: {
+  flashlightOn: boolean;
+  noiseM: number;
+  hidingInLocker: boolean;
+  holdingBreath: boolean;
+  newbornState: NewbornAIState;
+}): number {
+  if (input.hidingInLocker) {
+    return input.holdingBreath ? 5 : 22;
+  }
+  let pct = 14;
+  if (input.flashlightOn) pct += 40;
+  pct += Math.min(36, (input.noiseM / PHYSICS_PARAMS.noiseSprintM) * 36);
+  if (input.newbornState === "Hunt") pct = Math.max(pct, 95);
+  else if (input.newbornState === "Investigate") pct = Math.max(pct, 65);
+  return Math.max(0, Math.min(100, Math.round(pct)));
+}
+
+export function advanceDirectorWave(input: {
+  wavePhase: DirectorWavePhase;
+  timerSec: number;
+  dt: number;
+  newbornState: NewbornAIState;
+  difficulty: DifficultyMode;
+}): {
+  wavePhase: DirectorWavePhase;
+  timerSec: number;
+  ambushFlickerWarning: boolean;
+  event?: "retreat_to_vent" | "drop_from_vent";
+} {
+  const diff = DIFFICULTY_PARAMS[input.difficulty];
+  let wavePhase = input.wavePhase;
+  let timerSec = input.timerSec + input.dt;
+  let event: "retreat_to_vent" | "drop_from_vent" | undefined;
+
+  if (wavePhase === "pressure") {
+    if (
+      timerSec >= diff.pressureSec &&
+      input.newbornState === "Patrol"
+    ) {
+      wavePhase = "vent_retreat";
+      timerSec = 0;
+      event = "retreat_to_vent";
+    }
+  } else if (wavePhase === "vent_retreat") {
+    if (timerSec >= diff.ventRetreatSec) {
+      wavePhase = "pressure";
+      timerSec = 0;
+      event = "drop_from_vent";
+    }
+  } else {
+    wavePhase = "pressure";
+  }
+
+  const ambushFlickerWarning =
+    wavePhase === "vent_retreat" &&
+    timerSec >= Math.max(0, diff.ventRetreatSec - 1.8);
+
+  return { wavePhase, timerSec, ambushFlickerWarning, event };
 }
 
 export type ControlMode = "auto" | "touch" | "keyboard";

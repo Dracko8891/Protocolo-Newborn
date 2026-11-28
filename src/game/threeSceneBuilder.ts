@@ -63,6 +63,15 @@ export interface MedicalWingHandles {
   exitDoorLightMat: THREE.MeshStandardMaterial;
   kitPickup: THREE.Group;
   badgePickup: THREE.Group;
+  wallMapGroup: THREE.Group;
+  wallMapStatusMat: THREE.MeshStandardMaterial;
+  containmentDoorMesh: THREE.Mesh;
+  containmentPanelMat: THREE.MeshStandardMaterial;
+  decoyPickup: THREE.Group;
+  activeDecoyGroup: THREE.Group;
+  activeDecoyLedMat: THREE.MeshStandardMaterial;
+  logPickups: [THREE.Group, THREE.Group];
+  bloodDropsInst: THREE.InstancedMesh;
   lockerGroup: THREE.Group;
   relayGroup: THREE.Group;
   exitDoorGroup: THREE.Group;
@@ -70,6 +79,75 @@ export interface MedicalWingHandles {
   snowPoints?: THREE.Points;
   interactables: InteractableMarker[];
   disposables: Array<{ dispose: () => void }>;
+}
+
+export interface SceneBuildOptions {
+  texSize?: 256 | 512;
+  particleDensity?: number;
+  shadowsEnabled?: boolean;
+}
+
+function applyBoxVertexAO(geo: THREE.BufferGeometry, height: number): void {
+  const pos = geo.getAttribute("position");
+  if (!pos) return;
+  const colors = new Float32Array(pos.count * 3);
+  const halfH = Math.max(0.1, height * 0.5);
+  for (let i = 0; i < pos.count; i++) {
+    const yNorm = (pos.getY(i) + halfH) / (halfH * 2); // 0 = base, 1 = top
+    let shade = 1.0;
+    if (yNorm < 0.2) shade = 0.62;
+    else if (yNorm > 0.85) shade = 0.78;
+    colors[i * 3] = shade;
+    colors[i * 3 + 1] = shade;
+    colors[i * 3 + 2] = shade;
+  }
+  geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
+function buildWallMapCanvasTexture(chapter: ChapterConfig): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 192;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#04111c";
+  ctx.fillRect(0, 0, 256, 192);
+  ctx.strokeStyle = "#0ea5e9";
+  ctx.lineWidth = 2;
+  ctx.strokeRect(4, 4, 248, 184);
+
+  const mapX = (wx: number) => 16 + ((wx + 10) / 20) * 224;
+  const mapZ = (wz: number) => 176 - ((wz + 6) / 20.5) * 144;
+
+  ctx.fillStyle = "#1e293b";
+  ctx.strokeStyle = "#38bdf8";
+  ctx.lineWidth = 1;
+  for (const w of chapter.walls) {
+    const rx = mapX(w.minX);
+    const ry = mapZ(w.maxZ);
+    const rw = Math.max(2, mapX(w.maxX) - mapX(w.minX));
+    const rh = Math.max(2, mapZ(w.minZ) - mapZ(w.maxZ));
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeRect(rx, ry, rw, rh);
+  }
+
+  // Marcador VOCÊ ESTÁ AQUI
+  const mx = mapX(chapter.wallMapPos.x);
+  const mz = mapZ(chapter.wallMapPos.z);
+  ctx.fillStyle = "#f59e0b";
+  ctx.beginPath();
+  ctx.arc(mx, mz, 5, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "#7dd3fc";
+  ctx.font = "bold 11px monospace";
+  ctx.fillText("VOCÊ ESTÁ AQUI", 14, 20);
+  ctx.fillStyle = "#94a3b8";
+  ctx.font = "10px monospace";
+  ctx.fillText(chapter.shortLabel.toUpperCase(), 165, 20);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
 
 export function attachFirstPersonViewmodel(
@@ -89,20 +167,20 @@ export function attachFirstPersonViewmodel(
     metalness: 0.16,
   });
   const metalDarkMat = new THREE.MeshStandardMaterial({
-    color: 0x161c24,
-    roughness: 0.34,
-    metalness: 0.82,
+    color: 0x1e2631,
+    roughness: 0.42,
+    metalness: 0.42,
   });
   const knurlMat = new THREE.MeshStandardMaterial({
-    color: 0x26303d,
-    roughness: 0.45,
-    metalness: 0.78,
+    color: 0x2c3746,
+    roughness: 0.5,
+    metalness: 0.38,
   });
   const flashlightLensMat = new THREE.MeshStandardMaterial({
-    color: 0xfef3c7,
-    emissive: 0xfde68a,
-    emissiveIntensity: 1.6,
-    roughness: 0.12,
+    color: 0xfff5db,
+    emissive: 0xffebba,
+    emissiveIntensity: 1.4,
+    roughness: 0.16,
   });
   const tricorderTex = buildTricorderScreenTexture();
   const tricorderScreenMat = new THREE.MeshStandardMaterial({
@@ -110,18 +188,17 @@ export function attachFirstPersonViewmodel(
     map: tricorderTex,
     emissive: 0x67e8f9,
     emissiveMap: tricorderTex,
-    emissiveIntensity: 1.35,
-    roughness: 0.18,
+    emissiveIntensity: 1.25,
+    roughness: 0.2,
   });
+  // Cone translucido removido de uso ativo para evitar artefato de Raio-X/azul em GPUs ARM Mali
   const beamConeTex = buildBeamConeTexture();
   const beamConeMat = new THREE.MeshBasicMaterial({
     map: beamConeTex,
-    color: 0xfff0d4,
+    color: 0xfff2dc,
     transparent: true,
-    opacity: 0.055,
-    blending: THREE.AdditiveBlending,
+    opacity: 0.0,
     depthWrite: false,
-    side: THREE.DoubleSide,
   });
   disposables.push(
     sleeveMat,
@@ -174,11 +251,10 @@ export function attachFirstPersonViewmodel(
   lens.rotation.y = Math.PI;
   lens.position.set(0, 0.012, -0.181);
 
-  // Cone de luz atmosférica sutil na ponta da lanterna
-  const beamConeGeo = new THREE.ConeGeometry(0.55, 2.4, 16, 1, true);
-  beamConeGeo.translate(0, -1.2, 0);
-  beamConeGeo.rotateX(Math.PI / 2);
+  // Cone oculto para manter compatibilidade sem jamais atravessar paredes em Mali
+  const beamConeGeo = new THREE.ConeGeometry(0.18, 0.3, 8, 1, true);
   const beamConeMesh = new THREE.Mesh(beamConeGeo, beamConeMat);
+  beamConeMesh.visible = false;
   beamConeMesh.position.set(0, 0.012, -0.182);
 
   rightHand.add(
@@ -264,19 +340,15 @@ export function createNewbornModel(
   const root = new THREE.Group();
   const skinMaps = buildNewbornSkinMaps(maxAniso);
 
-  // Pele úmida, macilenta, venosa e ferida (MeshPhysicalMaterial orgânico com clearcoat + sheen)
-  const skinMat = new THREE.MeshPhysicalMaterial({
+  // Pele úmida orgânica em MeshStandardMaterial (estável em mediump ARM Mali, sem clearcoat/sheen)
+  const skinMat = new THREE.MeshStandardMaterial({
     color: 0xd8ccc9,
     map: skinMaps.map,
     normalMap: skinMaps.normalMap,
-    normalScale: new THREE.Vector2(1.15, 1.15),
+    normalScale: new THREE.Vector2(1.05, 1.05),
     roughnessMap: skinMaps.roughnessMap,
-    roughness: 0.48,
-    metalness: 0.02,
-    clearcoat: 0.85,
-    clearcoatRoughness: 0.14,
-    sheen: 0.35,
-    sheenColor: new THREE.Color(0x4a151b),
+    roughness: 0.42,
+    metalness: 0.04,
   });
   const sinewMat = new THREE.MeshStandardMaterial({
     color: 0x3b2225,
@@ -564,58 +636,62 @@ export function buildChapterScene(
   camera: THREE.PerspectiveCamera,
   renderer: THREE.WebGLRenderer,
   isSoftwareGl: boolean,
-  chapter: ChapterConfig
+  chapter: ChapterConfig,
+  options: SceneBuildOptions = {}
 ): MedicalWingHandles {
   const disposables: Array<{ dispose: () => void }> = [];
-  const maxAniso = renderer.capabilities.getMaxAnisotropy();
+  const texSize = options.texSize ?? (isSoftwareGl ? 256 : 512);
+  const particleDensity = options.particleDensity ?? (isSoftwareGl ? 0.5 : 1.0);
+  const shadowsEnabled = options.shadowsEnabled ?? !isSoftwareGl;
+  const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
   const CEIL_H = PHYSICS_PARAMS.ceilingHeight; // 2.85m claustrofóbico
 
   const bgByTheme: Record<ChapterConfig["palette"], number> = {
-    medical: 0x040203,
-    atrium: 0x02050a,
-    quarters: 0x050402,
-    biolab: 0x020604,
-    engineering: 0x010204,
-    omega: 0x020203,
-    hangar: 0x040508,
+    medical: 0x080608,
+    atrium: 0x050a12,
+    quarters: 0x0a0805,
+    biolab: 0x050c08,
+    engineering: 0x04070b,
+    omega: 0x060609,
+    hangar: 0x080a10,
   };
   const bgHex = bgByTheme[chapter.palette];
   scene.background = new THREE.Color(bgHex);
   scene.fog = new THREE.FogExp2(
     bgHex,
     chapter.palette === "hangar"
-      ? 0.12
+      ? 0.085
       : chapter.palette === "engineering"
-        ? 0.14
-        : 0.115
+        ? 0.095
+        : 0.082
   );
 
-  // Pipeline global de escuridão realista: AmbientLight <= 0.05
-  const ambientLight = new THREE.AmbientLight(0x94a3b8, 0.025);
+  // Iluminação visível e realista (nunca breu absoluto em telas mobile/Mali)
+  const ambientLight = new THREE.AmbientLight(0xa3b3c9, 0.18);
   scene.add(ambientLight);
 
   const hemiColorMap: Record<ChapterConfig["palette"], number> = {
-    medical: 0x4c1d1d,
-    atrium: 0x1e3a5f,
-    quarters: 0x452f14,
-    biolab: 0x14452f,
-    engineering: 0x0f2537,
-    omega: 0x27272a,
-    hangar: 0x334155,
+    medical: 0x6b2d2d,
+    atrium: 0x2c5282,
+    quarters: 0x6b4c24,
+    biolab: 0x225c40,
+    engineering: 0x1b3d59,
+    omega: 0x3b3d47,
+    hangar: 0x475569,
   };
   const hemiLight = new THREE.HemisphereLight(
     hemiColorMap[chapter.palette],
-    0x020305,
-    0.08
+    0x0d131c,
+    0.34
   );
   scene.add(hemiLight);
 
   const keyLight = new THREE.DirectionalLight(
-    chapter.palette === "medical" ? 0xfca5a5 : 0xcbd5e1,
-    0.09
+    chapter.palette === "medical" ? 0xfecaca : 0xdbeafe,
+    0.22
   );
   keyLight.position.set(3, 8, 4);
-  if (!isSoftwareGl) {
+  if (shadowsEnabled) {
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(1024, 1024);
     keyLight.shadow.camera.left = -12;
@@ -654,26 +730,25 @@ export function buildChapterScene(
   beaconMesh.position.set(0, CEIL_H - 0.1, 4.4);
   scene.add(beaconMesh);
 
-  const beaconConeGeo = new THREE.ConeGeometry(1.45, 2.35, 18, 1, true);
+  const beaconConeGeo = new THREE.ConeGeometry(1.15, 1.9, 14, 1, true);
   const beaconConeMat = new THREE.MeshBasicMaterial({
     color: beaconColor,
     transparent: true,
-    opacity: isSoftwareGl ? 0.04 : 0.075,
-    blending: THREE.AdditiveBlending,
+    opacity: 0.045,
     depthWrite: false,
     side: THREE.DoubleSide,
   });
   const beaconCone = new THREE.Mesh(beaconConeGeo, beaconConeMat);
-  beaconCone.position.set(0, CEIL_H - 1.28, 4.4);
+  beaconCone.position.set(0, CEIL_H - 1.05, 4.4);
   scene.add(beaconCone);
   disposables.push(beaconGeo, beaconMat, beaconConeGeo, beaconConeMat);
 
   // Fluorescente piscando no setor norte + Cabo elétrico soltando faíscas
-  const flickerLight = new THREE.PointLight(0xbae6fd, 1.0, 9.5, 2.0);
+  const flickerLight = new THREE.PointLight(0xbae6fd, 1.15, 10.5, 1.75);
   flickerLight.position.set(0, CEIL_H - 0.25, 10.6);
   scene.add(flickerLight);
 
-  const sparkLight = new THREE.PointLight(0xfbbf24, 0, 5.5, 2.2);
+  const sparkLight = new THREE.PointLight(0xfbbf24, 0, 5.5, 2.0);
   sparkLight.position.set(-1.3, 1.75, 6.2);
   scene.add(sparkLight);
 
@@ -686,8 +761,8 @@ export function buildChapterScene(
   disposables.push(sparkGeo, sparkMat);
 
   // Texturas PBR em cache compartilhado (albedo + normal + roughness)
-  const floorTex = buildFloorTileTexture(maxAniso);
-  const wallTex = buildWallPanelTexture(maxAniso, chapter.palette);
+  const floorTex = buildFloorTileTexture(maxAniso, texSize);
+  const wallTex = buildWallPanelTexture(maxAniso, chapter.palette, texSize);
   const grimyGlassTex = buildGrimyGlassTexture();
 
   const floorGeo = new THREE.PlaneGeometry(21, 21);
@@ -695,15 +770,15 @@ export function buildChapterScene(
     color: 0xffffff,
     map: floorTex.map,
     normalMap: floorTex.normalMap,
-    normalScale: new THREE.Vector2(0.85, 0.85),
+    normalScale: new THREE.Vector2(0.8, 0.8),
     roughnessMap: floorTex.roughnessMap,
     roughness: 0.88,
-    metalness: 0.3,
+    metalness: 0.24,
   });
   const floor = new THREE.Mesh(floorGeo, floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.position.set(0, 0, 4.1);
-  floor.receiveShadow = !isSoftwareGl;
+  floor.receiveShadow = shadowsEnabled;
   scene.add(floor);
   disposables.push(floorGeo, floorMat);
 
@@ -743,16 +818,16 @@ export function buildChapterScene(
   }
 
   // Teto escuro baixo (2.85m) com grades PBR + vigas estruturais + tubulações longitudinais em InstancedMesh
-  const ceilTex = buildCeilingGrateTexture(maxAniso);
+  const ceilTex = buildCeilingGrateTexture(maxAniso, texSize);
   const ceilingGeo = new THREE.PlaneGeometry(21, 21);
   const ceilingMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     map: ceilTex.map,
     normalMap: ceilTex.normalMap,
-    normalScale: new THREE.Vector2(0.85, 0.85),
+    normalScale: new THREE.Vector2(0.8, 0.8),
     roughnessMap: ceilTex.roughnessMap,
     roughness: 0.86,
-    metalness: 0.35,
+    metalness: 0.28,
   });
   const ceiling = new THREE.Mesh(ceilingGeo, ceilingMat);
   ceiling.rotation.x = Math.PI / 2;
@@ -760,12 +835,12 @@ export function buildChapterScene(
   scene.add(ceiling);
   disposables.push(ceilingGeo, ceilingMat);
 
-  // Vigas transversais no teto + tubulações de conduíte industrial + grade de duto aberto
+  // Vigas transversais no teto + tubulações de conduíte industrial + faixas LED emissivas sem custo de luz dinâmica
   const beamGeo = new THREE.BoxGeometry(19.0, 0.16, 0.24);
   const beamMat = new THREE.MeshStandardMaterial({
-    color: 0x161d27,
-    roughness: 0.52,
-    metalness: 0.76,
+    color: 0x1a222d,
+    roughness: 0.56,
+    metalness: 0.4,
   });
   const beamZs = [-4.2, -1.0, 2.2, 5.4, 8.6, 11.8];
   const beamsInst = new THREE.InstancedMesh(beamGeo, beamMat, beamZs.length);
@@ -780,13 +855,31 @@ export function buildChapterScene(
   scene.add(beamsInst);
   disposables.push(beamGeo, beamMat);
 
+  const ledStripGeo = new THREE.BoxGeometry(1.1, 0.03, 0.08);
+  const ledStripMat = new THREE.MeshStandardMaterial({
+    color: 0xcbd5e1,
+    emissive: chapter.palette === "biolab" ? 0x22c55e : 0x38bdf8,
+    emissiveIntensity: 0.85,
+    roughness: 0.25,
+  });
+  const ledZs = [-3.6, 0.4, 7.0, 12.2];
+  const ledInst = new THREE.InstancedMesh(ledStripGeo, ledStripMat, ledZs.length);
+  ledZs.forEach((lz, idx) => {
+    dummy.position.set(0, CEIL_H - 0.02, lz);
+    dummy.updateMatrix();
+    ledInst.setMatrixAt(idx, dummy.matrix);
+  });
+  ledInst.instanceMatrix.needsUpdate = true;
+  scene.add(ledInst);
+  disposables.push(ledStripGeo, ledStripMat);
+
   // Tubulações industriais paralelas ao corredor
   const pipeGeo = new THREE.CylinderGeometry(0.055, 0.055, 19.5, 10);
   pipeGeo.rotateX(Math.PI / 2);
   const pipeMat = new THREE.MeshStandardMaterial({
-    color: 0x2a2320,
+    color: chapter.palette === "engineering" ? 0x5c3420 : 0x2f2824,
     roughness: 0.62,
-    metalness: 0.65,
+    metalness: 0.42,
   });
   const pipeOffsets = [-1.18, -1.02, 1.05, 1.2];
   const pipesInst = new THREE.InstancedMesh(pipeGeo, pipeMat, pipeOffsets.length);
@@ -825,9 +918,9 @@ export function buildChapterScene(
   // Pilastras modulares PBR em InstancedMesh (relevo 3D ao longo dos corredores)
   const pillarGeo = new THREE.BoxGeometry(0.24, CEIL_H, 0.24);
   const pillarMat = new THREE.MeshStandardMaterial({
-    color: 0x19202a,
-    roughness: 0.48,
-    metalness: 0.76,
+    color: 0x1f2734,
+    roughness: 0.52,
+    metalness: 0.42,
   });
   const pillarPositions = [
     [-9.1, CEIL_H * 0.5, -5.2],
@@ -859,34 +952,35 @@ export function buildChapterScene(
   scene.add(pillarsInst);
   disposables.push(pillarGeo, pillarMat);
 
-  // Materiais modulares PBR de parede, vidro sujo, mobília e bio-tanques
+  // Materiais modulares PBR de parede (com vertexColors para Vertex AO), vidro sujo em MeshStandardMaterial e mobília
   const wallMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
+    vertexColors: true,
     map: wallTex.map,
     normalMap: wallTex.normalMap,
-    normalScale: new THREE.Vector2(0.95, 0.95),
+    normalScale: new THREE.Vector2(0.9, 0.9),
     roughnessMap: wallTex.roughnessMap,
     roughness: 0.78,
-    metalness: 0.22,
+    metalness: 0.18,
   });
-  const glassMat = new THREE.MeshPhysicalMaterial({
+  const glassMat = new THREE.MeshStandardMaterial({
     color: chapter.palette === "biolab" ? 0x6ee7b7 : 0x94a3b8,
     map: grimyGlassTex,
-    roughness: 0.28,
+    roughness: 0.3,
     metalness: 0.08,
     transparent: true,
-    opacity: isSoftwareGl ? 0.36 : 0.45,
+    opacity: 0.42,
     depthWrite: false,
   });
   const deskMat = new THREE.MeshStandardMaterial({
-    color: 0x11151d,
+    color: 0x161c26,
     roughness: 0.72,
     metalness: 0.25,
   });
   const rustTrimMat = new THREE.MeshStandardMaterial({
-    color: 0x3b2419,
-    roughness: 0.88,
-    metalness: 0.35,
+    color: 0x452b1e,
+    roughness: 0.85,
+    metalness: 0.28,
   });
   disposables.push(wallMat, glassMat, deskMat, rustTrimMat);
 
@@ -964,6 +1058,10 @@ export function buildChapterScene(
     }
 
     const geo = new THREE.BoxGeometry(sx, sy, sz);
+    const isWallMesh = !w.kind || w.kind === "wall";
+    if (isWallMesh) {
+      applyBoxVertexAO(geo, sy);
+    }
     const mat =
       w.kind === "glass" ? glassMat : w.kind === "desk" ? deskMat : wallMat;
     const mesh = new THREE.Mesh(geo, mat);
@@ -999,10 +1097,34 @@ export function buildChapterScene(
       disposables.push(rimGeo, paperGeo, paperMat);
     }
 
-    mesh.castShadow = !isSoftwareGl && w.kind !== "glass";
-    mesh.receiveShadow = !isSoftwareGl;
+    mesh.castShadow = shadowsEnabled && w.kind !== "glass";
+    mesh.receiveShadow = shadowsEnabled;
     scene.add(mesh);
     disposables.push(mesh.geometry);
+  }
+
+  // Props visuais de identidade do setor (leves e fora da malha de colisão principal)
+  if (chapter.palette === "medical") {
+    const trayGeo = new THREE.BoxGeometry(0.6, 0.04, 0.4);
+    const trayMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.35 });
+    const tray = new THREE.Mesh(trayGeo, trayMat);
+    tray.position.set(-5.6, 0.92, -0.35);
+    scene.add(tray);
+    disposables.push(trayGeo, trayMat);
+  } else if (chapter.palette === "engineering") {
+    const valveGeo = new THREE.TorusGeometry(0.24, 0.04, 6, 12);
+    const valveMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.45, metalness: 0.3 });
+    const valve = new THREE.Mesh(valveGeo, valveMat);
+    valve.position.set(-2.35, 1.35, 1.4);
+    scene.add(valve);
+    disposables.push(valveGeo, valveMat);
+  } else if (chapter.palette === "hangar") {
+    const crateGeo = new THREE.BoxGeometry(1.1, 0.85, 1.1);
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x3f2e21, roughness: 0.82, metalness: 0.15 });
+    const crate = new THREE.Mesh(crateGeo, crateMat);
+    crate.position.set(7.6, 0.425, 10.8);
+    scene.add(crate);
+    disposables.push(crateGeo, crateMat);
   }
 
   // Silhuetas de cadáveres caídos no chão (storytelling ambiental de horror)
@@ -1043,7 +1165,7 @@ export function buildChapterScene(
   }
 
   // Partículas sutis de poeira atmosférica na luz
-  const sporeCount = 180;
+  const sporeCount = Math.max(48, Math.round(180 * particleDensity));
   const sporePositions = new Float32Array(sporeCount * 3);
   for (let i = 0; i < sporeCount; i++) {
     sporePositions[i * 3] = (Math.random() - 0.5) * 18;
@@ -1059,7 +1181,7 @@ export function buildChapterScene(
     color: chapter.palette === "biolab" ? 0x4ade80 : 0x94a3b8,
     size: 0.032,
     transparent: true,
-    opacity: 0.38,
+    opacity: 0.35,
     depthWrite: false,
   });
   const spores = new THREE.Points(sporeGeo, sporeMat);
@@ -1069,7 +1191,7 @@ export function buildChapterScene(
   // Nevasca exterior além da comporta norte no Capítulo 7 (Hangar)
   let snowPoints: THREE.Points | undefined;
   if (chapter.palette === "hangar") {
-    const snowCount = 220;
+    const snowCount = Math.max(70, Math.round(220 * particleDensity));
     const snowPos = new Float32Array(snowCount * 3);
     for (let i = 0; i < snowCount; i++) {
       snowPos[i * 3] = (Math.random() - 0.5) * 14;
@@ -1199,9 +1321,9 @@ export function buildChapterScene(
   const lockerDoorGeo = new THREE.BoxGeometry(0.9, 2.05, 0.06);
   const lockerHandleGeo = new THREE.BoxGeometry(0.04, 0.24, 0.07);
   const lockerMat = new THREE.MeshStandardMaterial({
-    color: 0x2a3442,
-    roughness: 0.45,
-    metalness: 0.75,
+    color: 0x2f3a4a,
+    roughness: 0.48,
+    metalness: 0.4,
   });
   const lockerBody = new THREE.Mesh(lockerBodyGeo, lockerMat);
   lockerBody.position.y = 1.125;
@@ -1258,9 +1380,9 @@ export function buildChapterScene(
   const doorGeo = new THREE.BoxGeometry(2.1, 2.5, 0.22);
   const padGeo = new THREE.BoxGeometry(0.24, 0.38, 0.1);
   const exitDoorMat = new THREE.MeshStandardMaterial({
-    color: 0x131a24,
-    roughness: 0.36,
-    metalness: 0.82,
+    color: 0x1a2230,
+    roughness: 0.42,
+    metalness: 0.42,
   });
   const exitDoorLightMat = new THREE.MeshStandardMaterial({
     color: 0xef4444,
@@ -1275,7 +1397,6 @@ export function buildChapterScene(
   frameTop.position.set(0, CEIL_H - 0.18, 0);
   const exitDoorMesh = new THREE.Mesh(doorGeo, exitDoorMat);
   exitDoorMesh.position.set(0, 1.25, 0);
-  // Barra transversal pneumática na comporta
   const barGeo = new THREE.BoxGeometry(1.96, 0.14, 0.28);
   const doorBar = new THREE.Mesh(barGeo, rustTrimMat);
   doorBar.position.set(0, 0.0, 0);
@@ -1293,7 +1414,6 @@ export function buildChapterScene(
     z: chapter.exitPos.z - 0.4,
     mesh: exitDoorGroup,
   });
-  // Barra luminosa tática na comporta para leitura no breu
   const exitLampGeo = new THREE.BoxGeometry(1.6, 0.08, 0.14);
   const exitLamp = new THREE.Mesh(exitLampGeo, exitDoorLightMat);
   exitLamp.position.set(0, CEIL_H - 0.38, -0.22);
@@ -1309,6 +1429,188 @@ export function buildChapterScene(
     exitDoorMat,
     exitDoorLightMat
   );
+
+  // 5.1 Mapa Iluminado de Parede ("VOCÊ ESTÁ AQUI")
+  const wallMapGroup = new THREE.Group();
+  const wallMapTex = buildWallMapCanvasTexture(chapter);
+  const wallMapFrameGeo = new THREE.BoxGeometry(1.1, 0.85, 0.08);
+  const wallMapScreenGeo = new THREE.PlaneGeometry(0.96, 0.72);
+  const wallMapScreenMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: wallMapTex,
+    emissive: 0x38bdf8,
+    emissiveMap: wallMapTex,
+    emissiveIntensity: 0.95,
+    roughness: 0.22,
+  });
+  const wallMapStatusMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.1,
+  });
+  const wmFrame = new THREE.Mesh(wallMapFrameGeo, deskMat);
+  const wmScreen = new THREE.Mesh(wallMapScreenGeo, wallMapScreenMat);
+  wmScreen.position.z = 0.045;
+  const wmLedGeo = new THREE.BoxGeometry(0.96, 0.04, 0.09);
+  const wmLed = new THREE.Mesh(wmLedGeo, wallMapStatusMat);
+  wmLed.position.y = 0.45;
+  wallMapGroup.add(wmFrame, wmScreen, wmLed);
+  wallMapGroup.position.set(chapter.wallMapPos.x, 1.38, chapter.wallMapPos.z);
+  wallMapGroup.rotation.y = chapter.wallMapPos.rotY;
+  scene.add(wallMapGroup);
+  interactables.push({
+    id: "wall_map",
+    label: "Escanear Mapa do Setor",
+    x: chapter.wallMapPos.x,
+    y: 1.38,
+    z: chapter.wallMapPos.z,
+    mesh: wallMapGroup,
+  });
+  disposables.push(
+    wallMapTex,
+    wallMapFrameGeo,
+    wallMapScreenGeo,
+    wallMapLedGeoFix(wmLedGeo),
+    wallMapScreenMat,
+    wallMapStatusMat
+  );
+
+  // 5.2 Porta de Contenção Temporária (bloqueia passagem e força desvio do Newborn)
+  const cw = chapter.containmentDoor.wall;
+  const cdW = Math.max(0.25, cw.maxX - cw.minX);
+  const cdD = Math.max(0.25, cw.maxZ - cw.minZ);
+  const cdGeo = new THREE.BoxGeometry(cdW, 2.55, cdD);
+  const containmentDoorMat = new THREE.MeshStandardMaterial({
+    color: 0x263242,
+    roughness: 0.44,
+    metalness: 0.36,
+  });
+  const containmentPanelMat = new THREE.MeshStandardMaterial({
+    color: 0x06b6d4,
+    emissive: 0x06b6d4,
+    emissiveIntensity: 1.2,
+  });
+  const containmentDoorMesh = new THREE.Mesh(cdGeo, containmentDoorMat);
+  containmentDoorMesh.position.set(
+    (cw.minX + cw.maxX) * 0.5,
+    3.65,
+    (cw.minZ + cw.maxZ) * 0.5
+  );
+  scene.add(containmentDoorMesh);
+
+  const cdPanelGeo = new THREE.BoxGeometry(0.26, 0.42, 0.14);
+  const cdPanel = new THREE.Mesh(cdPanelGeo, containmentPanelMat);
+  cdPanel.position.set(chapter.containmentDoor.panelX, 1.35, chapter.containmentDoor.panelZ);
+  scene.add(cdPanel);
+  interactables.push({
+    id: "containment_door",
+    label: chapter.containmentDoor.label,
+    x: chapter.containmentDoor.panelX,
+    y: 1.35,
+    z: chapter.containmentDoor.panelZ,
+    mesh: cdPanel,
+  });
+  disposables.push(cdGeo, cdPanelGeo, containmentDoorMat, containmentPanelMat);
+
+  // 5.3 Isca Sonora (Pickup + Dispositivo ativo lançado no chão)
+  const decoyPickup = new THREE.Group();
+  const decoyBodyGeo = new THREE.CylinderGeometry(0.08, 0.09, 0.22, 10);
+  const decoyRingGeo = new THREE.TorusGeometry(0.085, 0.018, 6, 12);
+  const decoyMat = new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.4,
+    metalness: 0.35,
+  });
+  const activeDecoyLedMat = new THREE.MeshStandardMaterial({
+    color: 0x22d3ee,
+    emissive: 0x22d3ee,
+    emissiveIntensity: 1.6,
+  });
+  const dBody = new THREE.Mesh(decoyBodyGeo, decoyMat);
+  const dRing = new THREE.Mesh(decoyRingGeo, activeDecoyLedMat);
+  dRing.rotation.x = Math.PI / 2;
+  dRing.position.y = 0.08;
+  decoyPickup.add(dBody, dRing);
+  decoyPickup.position.set(chapter.decoyPos.x, 0.14, chapter.decoyPos.z);
+  scene.add(decoyPickup);
+  interactables.push({
+    id: "pickup_decoy",
+    label: "Coletar Isca Sonora",
+    x: chapter.decoyPos.x,
+    y: 0.14,
+    z: chapter.decoyPos.z,
+    mesh: decoyPickup,
+  });
+
+  const activeDecoyGroup = decoyPickup.clone();
+  activeDecoyGroup.visible = false;
+  scene.add(activeDecoyGroup);
+  disposables.push(decoyBodyGeo, decoyRingGeo, decoyMat, activeDecoyLedMat);
+
+  // 5.4 Armadilhas Sonoras no Chão (Cacos de vidro / Poças fundas)
+  const trapGlassGeo = new THREE.CircleGeometry(0.75, 10);
+  const trapGlassMat = new THREE.MeshStandardMaterial({
+    color: 0x94a3b8,
+    roughness: 0.18,
+    metalness: 0.3,
+    transparent: true,
+    opacity: 0.45,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  });
+  for (const trap of chapter.soundTraps) {
+    const tm = new THREE.Mesh(
+      trapGlassGeo,
+      trap.kind === "glass" ? trapGlassMat : waterPuddleMat
+    );
+    tm.rotation.x = -Math.PI / 2;
+    tm.scale.set(trap.radius, trap.radius, 1);
+    tm.position.set(trap.x, 0.016, trap.z);
+    scene.add(tm);
+  }
+  disposables.push(trapGlassGeo, trapGlassMat);
+
+  // 5.5 2 Logs de Sobreviventes Coletáveis por Capítulo
+  const logBodyGeo = new THREE.BoxGeometry(0.24, 0.03, 0.32);
+  const logScreenGeo = new THREE.PlaneGeometry(0.18, 0.22);
+  const logBodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 });
+  const logScreenMat = new THREE.MeshStandardMaterial({
+    color: 0xfde68a,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.0,
+  });
+  const buildLogPickup = (idx: 0 | 1) => {
+    const spec = chapter.survivorLogs[idx];
+    const g = new THREE.Group();
+    const b = new THREE.Mesh(logBodyGeo, logBodyMat);
+    const sc = new THREE.Mesh(logScreenGeo, logScreenMat);
+    sc.rotation.x = -Math.PI / 2;
+    sc.position.y = 0.018;
+    g.add(b, sc);
+    g.position.set(spec.x, 0.12, spec.z);
+    scene.add(g);
+    interactables.push({
+      id: `pickup_log_${idx}`,
+      label: `Ler Registro: ${spec.author}`,
+      x: spec.x,
+      y: 0.12,
+      z: spec.z,
+      mesh: g,
+    });
+    return g;
+  };
+  const logPickups: [THREE.Group, THREE.Group] = [buildLogPickup(0), buildLogPickup(1)];
+  disposables.push(logBodyGeo, logScreenGeo, logBodyMat, logScreenMat);
+
+  // 5.6 Rastro de Sangue InstancedMesh (até 48 gotas quando jogador está ferido)
+  const bloodDropGeo = new THREE.CircleGeometry(0.14, 8);
+  bloodDropGeo.rotateX(-Math.PI / 2);
+  const bloodDropsInst = new THREE.InstancedMesh(bloodDropGeo, bloodPuddleMat, 48);
+  bloodDropsInst.count = 0;
+  bloodDropsInst.frustumCulled = false;
+  scene.add(bloodDropsInst);
+  disposables.push(bloodDropGeo);
 
   // 6. Newborn Orgânico + Viewmodel 1ª Pessoa
   const newborn = createNewbornModel(disposables, maxAniso);
@@ -1364,6 +1666,15 @@ export function buildChapterScene(
     exitDoorLightMat,
     kitPickup,
     badgePickup,
+    wallMapGroup,
+    wallMapStatusMat,
+    containmentDoorMesh,
+    containmentPanelMat,
+    decoyPickup,
+    activeDecoyGroup,
+    activeDecoyLedMat,
+    logPickups,
+    bloodDropsInst,
     lockerGroup,
     relayGroup,
     exitDoorGroup,
@@ -1372,4 +1683,8 @@ export function buildChapterScene(
     interactables,
     disposables,
   };
+}
+
+function wallMapLedGeoFix<T>(g: T): T {
+  return g;
 }

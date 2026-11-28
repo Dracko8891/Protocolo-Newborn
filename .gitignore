@@ -21,6 +21,8 @@ dist/
 dist-levels/
 dist-apk/
 .playwright-cli/
+.aistudio/
 app/build/
 .tmp_*
 *.log
+

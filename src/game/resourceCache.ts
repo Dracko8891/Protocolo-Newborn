@@ -73,9 +73,12 @@ const THEME_SPECS: Record<ChapterTheme, ThemeVisualSpec> = {
 
 const textureCache: {
   floor?: CachedPbrMaps;
+  floorSize?: 256 | 512;
   ceiling?: CachedPbrMaps;
+  ceilingSize?: 256 | 512;
   newbornSkin?: CachedPbrMaps;
   walls: Partial<Record<ChapterTheme, CachedPbrMaps>>;
+  wallSizes: Partial<Record<ChapterTheme, 256 | 512>>;
   flashlightCookie?: THREE.CanvasTexture;
   beamCone?: THREE.CanvasTexture;
   tricorderScreen?: THREE.CanvasTexture;
@@ -88,6 +91,7 @@ const textureCache: {
   chapterDownloads: Partial<Record<ChapterId, ChapterDownloadProgress>>;
 } = {
   walls: {},
+  wallSizes: {},
   models: new Map(),
   status: "idle",
   progressPct: 0,
@@ -243,8 +247,11 @@ function addWeatheredGrain(
   }
 }
 
-export function buildFloorTileTexture(maxAnisotropy: number): CachedPbrMaps {
-  if (textureCache.floor) {
+export function buildFloorTileTexture(
+  maxAnisotropy: number,
+  texSize: 256 | 512 = 512
+): CachedPbrMaps {
+  if (textureCache.floor && textureCache.floorSize === texSize) {
     textureCache.floor.map.anisotropy = maxAnisotropy;
     textureCache.floor.normalMap.anisotropy = maxAnisotropy;
     textureCache.floor.roughnessMap.anisotropy = maxAnisotropy;
@@ -252,24 +259,30 @@ export function buildFloorTileTexture(maxAnisotropy: number): CachedPbrMaps {
   }
 
   const size = 512;
+  const pxSize = texSize;
+  const scale = pxSize / size;
+
   const albedo = document.createElement("canvas");
-  albedo.width = size;
-  albedo.height = size;
+  albedo.width = pxSize;
+  albedo.height = pxSize;
   const ctx = albedo.getContext("2d")!;
-  ctx.fillStyle = "#11161d";
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#141a23";
   ctx.fillRect(0, 0, size, size);
 
   const heightCanvas = document.createElement("canvas");
-  heightCanvas.width = size;
-  heightCanvas.height = size;
+  heightCanvas.width = pxSize;
+  heightCanvas.height = pxSize;
   const hctx = heightCanvas.getContext("2d")!;
+  hctx.scale(scale, scale);
   hctx.fillStyle = "#888888";
   hctx.fillRect(0, 0, size, size);
 
   const roughCanvas = document.createElement("canvas");
-  roughCanvas.width = size;
-  roughCanvas.height = size;
+  roughCanvas.width = pxSize;
+  roughCanvas.height = pxSize;
   const rctx = roughCanvas.getContext("2d")!;
+  rctx.scale(scale, scale);
   rctx.fillStyle = "#c2c2c2"; // ~0.76 roughness base
   rctx.fillRect(0, 0, size, size);
 
@@ -366,11 +379,15 @@ export function buildFloorTileTexture(maxAnisotropy: number): CachedPbrMaps {
   roughnessMap.anisotropy = maxAnisotropy;
 
   textureCache.floor = { map, normalMap, roughnessMap };
+  textureCache.floorSize = texSize;
   return textureCache.floor;
 }
 
-export function buildCeilingGrateTexture(maxAnisotropy: number): CachedPbrMaps {
-  if (textureCache.ceiling) {
+export function buildCeilingGrateTexture(
+  maxAnisotropy: number,
+  texSize: 256 | 512 = 512
+): CachedPbrMaps {
+  if (textureCache.ceiling && textureCache.ceilingSize === texSize) {
     textureCache.ceiling.map.anisotropy = maxAnisotropy;
     textureCache.ceiling.normalMap.anisotropy = maxAnisotropy;
     textureCache.ceiling.roughnessMap.anisotropy = maxAnisotropy;
@@ -378,24 +395,30 @@ export function buildCeilingGrateTexture(maxAnisotropy: number): CachedPbrMaps {
   }
 
   const size = 512;
+  const pxSize = texSize;
+  const scale = pxSize / size;
+
   const albedo = document.createElement("canvas");
-  albedo.width = size;
-  albedo.height = size;
+  albedo.width = pxSize;
+  albedo.height = pxSize;
   const ctx = albedo.getContext("2d")!;
-  ctx.fillStyle = "#080b10";
+  ctx.scale(scale, scale);
+  ctx.fillStyle = "#0b0f16";
   ctx.fillRect(0, 0, size, size);
 
   const heightCanvas = document.createElement("canvas");
-  heightCanvas.width = size;
-  heightCanvas.height = size;
+  heightCanvas.width = pxSize;
+  heightCanvas.height = pxSize;
   const hctx = heightCanvas.getContext("2d")!;
+  hctx.scale(scale, scale);
   hctx.fillStyle = "#555555";
   hctx.fillRect(0, 0, size, size);
 
   const roughCanvas = document.createElement("canvas");
-  roughCanvas.width = size;
-  roughCanvas.height = size;
+  roughCanvas.width = pxSize;
+  roughCanvas.height = pxSize;
   const rctx = roughCanvas.getContext("2d")!;
+  rctx.scale(scale, scale);
   rctx.fillStyle = "#cfcfcf";
   rctx.fillRect(0, 0, size, size);
 
@@ -431,15 +454,17 @@ export function buildCeilingGrateTexture(maxAnisotropy: number): CachedPbrMaps {
   roughnessMap.anisotropy = maxAnisotropy;
 
   textureCache.ceiling = { map, normalMap, roughnessMap };
+  textureCache.ceilingSize = texSize;
   return textureCache.ceiling;
 }
 
 export function buildWallPanelTexture(
   maxAnisotropy: number,
-  palette: ChapterTheme = "medical"
+  palette: ChapterTheme = "medical",
+  texSize: 256 | 512 = 512
 ): CachedPbrMaps {
   const existing = textureCache.walls[palette];
-  if (existing) {
+  if (existing && textureCache.wallSizes[palette] === texSize) {
     existing.map.anisotropy = maxAnisotropy;
     existing.normalMap.anisotropy = maxAnisotropy;
     existing.roughnessMap.anisotropy = maxAnisotropy;
@@ -448,21 +473,26 @@ export function buildWallPanelTexture(
 
   const spec = THEME_SPECS[palette];
   const size = 512;
+  const pxSize = texSize;
+  const scale = pxSize / size;
 
   const albedo = document.createElement("canvas");
-  albedo.width = size;
-  albedo.height = size;
+  albedo.width = pxSize;
+  albedo.height = pxSize;
   const ctx = albedo.getContext("2d")!;
+  ctx.scale(scale, scale);
 
   const heightCanvas = document.createElement("canvas");
-  heightCanvas.width = size;
-  heightCanvas.height = size;
+  heightCanvas.width = pxSize;
+  heightCanvas.height = pxSize;
   const hctx = heightCanvas.getContext("2d")!;
+  hctx.scale(scale, scale);
 
   const roughCanvas = document.createElement("canvas");
-  roughCanvas.width = size;
-  roughCanvas.height = size;
+  roughCanvas.width = pxSize;
+  roughCanvas.height = pxSize;
   const rctx = roughCanvas.getContext("2d")!;
+  rctx.scale(scale, scale);
 
   ctx.fillStyle = spec.baseHex;
   ctx.fillRect(0, 0, size, size);
@@ -567,6 +597,7 @@ export function buildWallPanelTexture(
 
   const bundle = { map, normalMap, roughnessMap };
   textureCache.walls[palette] = bundle;
+  textureCache.wallSizes[palette] = texSize;
   return bundle;
 }
 
@@ -957,7 +988,8 @@ let activePreloadPromise: Promise<ResourceCacheSnapshot> | null = null;
 
 export async function preloadEssentialResources(
   onProgress?: (snap: ResourceCacheSnapshot) => void,
-  maxAnisotropy = 4
+  maxAnisotropy = 4,
+  texSize: 256 | 512 = 512
 ): Promise<ResourceCacheSnapshot> {
   if (textureCache.status === "ready") {
     const snap = getResourceCacheSnapshot();
@@ -980,8 +1012,8 @@ export async function preloadEssentialResources(
     onProgress?.(getResourceCacheSnapshot());
 
     await yieldToMain();
-    buildFloorTileTexture(maxAnisotropy);
-    buildCeilingGrateTexture(maxAnisotropy);
+    buildFloorTileTexture(maxAnisotropy, texSize);
+    buildCeilingGrateTexture(maxAnisotropy, texSize);
     buildNewbornSkinMaps(maxAnisotropy);
     buildFlashlightCookieTexture();
     buildBeamConeTexture();
@@ -1001,7 +1033,7 @@ export async function preloadEssentialResources(
     ];
     for (let i = 0; i < themes.length; i++) {
       await yieldToMain();
-      buildWallPanelTexture(maxAnisotropy, themes[i]);
+      buildWallPanelTexture(maxAnisotropy, themes[i], texSize);
       textureCache.progressPct = 45 + Math.round(((i + 1) / themes.length) * 40);
       onProgress?.(getResourceCacheSnapshot());
     }

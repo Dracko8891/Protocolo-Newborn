@@ -1,5 +1,5 @@
 import React from "react";
-import { Eye, FileText, HeartPulse, Map as MapIcon, Package, Radio, Trash2, X } from "lucide-react";
+import { Eye, FileText, HeartPulse, Map as MapIcon, Package, Radio, Trash2, Volume2, X } from "lucide-react";
 import { ChapterConfig, HealthState, InventoryItem } from "../game/gameLogic";
 import { LiveTelemetry } from "./VanguardCanvas";
 
@@ -17,9 +17,12 @@ interface PaddModalProps {
   hasKitPickup: boolean;
   hasBadgePickup: boolean;
   pinDiscovered: boolean;
+  wallMapDiscovered?: boolean;
+  collectedLogIds?: string[];
   onUseItem: (id: string) => void;
   onInspectItem: (id: string) => void;
   onDiscardItem: (id: string) => void;
+  onReplayLogCue?: (cueId: string) => void;
   onOpenStudio: () => void;
   onClose: () => void;
 }
@@ -36,9 +39,12 @@ export const PaddModal: React.FC<PaddModalProps> = ({
   hasKitPickup,
   hasBadgePickup,
   pinDiscovered,
+  wallMapDiscovered = false,
+  collectedLogIds = [],
   onUseItem,
   onInspectItem,
   onDiscardItem,
+  onReplayLogCue,
   onOpenStudio,
   onClose,
 }) => {
@@ -100,7 +106,7 @@ export const PaddModal: React.FC<PaddModalProps> = ({
             }`}
           >
             <Package className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-            Inventário ({inventory.length}/6)
+            Crachá &amp; Inventário ({inventory.length}/6)
           </button>
           <button
             type="button"
@@ -112,7 +118,7 @@ export const PaddModal: React.FC<PaddModalProps> = ({
             }`}
           >
             <MapIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-            Mapa Holográfico
+            Esquema do Setor {wallMapDiscovered ? "" : "(Parcial)"}
           </button>
           <button
             type="button"
@@ -124,7 +130,7 @@ export const PaddModal: React.FC<PaddModalProps> = ({
             }`}
           >
             <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
-            Arquivos & Logs
+            Arquivos &amp; Logs ({collectedLogIds.length}/2)
           </button>
         </div>
 
@@ -197,13 +203,13 @@ export const PaddModal: React.FC<PaddModalProps> = ({
                       </div>
 
                       <div className="mt-3 flex flex-wrap gap-2">
-                        {item.category === "consumivel" && (
+                        {(item.category === "consumivel" || item.id === "isca_sonora") && (
                           <button
                             type="button"
                             onClick={() => onUseItem(item.id)}
                             className="border border-emerald-500/60 bg-emerald-950/60 px-2.5 py-1 text-xs font-medium text-emerald-200 hover:bg-emerald-900"
                           >
-                            Usar
+                            {item.id === "isca_sonora" ? "Lançar Isca" : "Usar"}
                           </button>
                         )}
                         {item.inspectable && (
@@ -240,94 +246,129 @@ export const PaddModal: React.FC<PaddModalProps> = ({
                 <svg
                   viewBox="0 0 220 200"
                   className="h-64 w-full max-w-[280px]"
-                  aria-label="Mapa da Ala Médica"
+                  aria-label="Esquema do Setor"
                 >
-                  {/* Contorno do Setor Claustrofóbico */}
+                  <defs>
+                    <clipPath id="sectorFogRadius">
+                      <circle
+                        cx={mapX(telemetry.playerX)}
+                        cy={mapZ(telemetry.playerZ)}
+                        r="38"
+                      />
+                    </clipPath>
+                  </defs>
+                  {/* Contorno do Setor */}
                   <rect
                     x={mapX(-9.8)}
                     y={mapZ(14.2)}
                     width={mapX(9.8) - mapX(-9.8)}
                     height={mapZ(-6.0) - mapZ(14.2)}
-                    fill="#0b1524"
+                    fill="#070d17"
                     stroke="#06b6d4"
                     strokeWidth="1.5"
                   />
-                  {/* Paredes e obstáculos dinâmicos do capítulo */}
-                  {chapter.walls.map((w) => {
-                    const rx = mapX(w.minX);
-                    const ry = mapZ(w.maxZ);
-                    const rw = Math.max(2, mapX(w.maxX) - mapX(w.minX));
-                    const rh = Math.max(2, mapZ(w.minZ) - mapZ(w.maxZ));
-                    return (
-                      <rect
-                        key={w.id}
-                        x={rx}
-                        y={ry}
-                        width={rw}
-                        height={rh}
-                        fill={
-                          w.kind === "glass"
-                            ? "#0e7490"
-                            : w.kind === "tank"
-                              ? "#166534"
-                              : w.kind === "core"
-                                ? "#0369a1"
-                                : w.kind === "bunk" || w.kind === "desk"
-                                  ? "#334155"
-                                  : "#1e293b"
-                        }
-                        stroke={
-                          w.kind === "glass"
-                            ? "#22d3ee"
-                            : w.kind === "tank"
-                              ? "#4ade80"
-                              : "#38bdf8"
-                        }
-                        strokeWidth={w.kind === "wall" ? "0.7" : "0.5"}
-                        opacity={w.kind === "desk" || w.kind === "bunk" ? 0.85 : 0.92}
+                  <g clipPath={wallMapDiscovered ? undefined : "url(#sectorFogRadius)"}>
+                    {/* Paredes e obstáculos dinâmicos do capítulo */}
+                    {chapter.walls.map((w) => {
+                      const rx = mapX(w.minX);
+                      const ry = mapZ(w.maxZ);
+                      const rw = Math.max(2, mapX(w.maxX) - mapX(w.minX));
+                      const rh = Math.max(2, mapZ(w.minZ) - mapZ(w.maxZ));
+                      return (
+                        <rect
+                          key={w.id}
+                          x={rx}
+                          y={ry}
+                          width={rw}
+                          height={rh}
+                          fill={
+                            w.kind === "glass"
+                              ? "#0e7490"
+                              : w.kind === "tank"
+                                ? "#166534"
+                                : w.kind === "core"
+                                  ? "#0369a1"
+                                  : w.kind === "bunk" || w.kind === "desk"
+                                    ? "#334155"
+                                    : "#1e293b"
+                          }
+                          stroke={
+                            w.kind === "glass"
+                              ? "#22d3ee"
+                              : w.kind === "tank"
+                                ? "#4ade80"
+                                : "#38bdf8"
+                          }
+                          strokeWidth={w.kind === "wall" ? "0.7" : "0.5"}
+                          opacity={w.kind === "desk" || w.kind === "bunk" ? 0.85 : 0.92}
+                        />
+                      );
+                    })}
+                    {/* Comporta Norte */}
+                    <rect
+                      x={mapX(chapter.exitPos.x - 1.3)}
+                      y={mapZ(chapter.exitPos.z + 0.3)}
+                      width={mapX(chapter.exitPos.x + 1.3) - mapX(chapter.exitPos.x - 1.3)}
+                      height="5"
+                      fill={doorUnlocked ? "#10b981" : "#ef4444"}
+                    />
+                    {/* Painel de Relés */}
+                    <circle
+                      cx={mapX(chapter.relayPos.x)}
+                      cy={mapZ(chapter.relayPos.z - 0.3)}
+                      r="4"
+                      fill={relaySolved ? "#10b981" : "#f59e0b"}
+                    />
+                    {/* Porta de Contenção */}
+                    <rect
+                      x={mapX(chapter.containmentDoor.wall.minX)}
+                      y={mapZ(chapter.containmentDoor.wall.maxZ)}
+                      width={Math.max(
+                        3,
+                        mapX(chapter.containmentDoor.wall.maxX) -
+                          mapX(chapter.containmentDoor.wall.minX)
+                      )}
+                      height={Math.max(
+                        3,
+                        mapZ(chapter.containmentDoor.wall.minZ) -
+                          mapZ(chapter.containmentDoor.wall.maxZ)
+                      )}
+                      fill="#22d3ee"
+                    />
+                    {/* Armário Esconderijo */}
+                    <rect
+                      x={mapX(chapter.lockerPos.x) - 3}
+                      y={mapZ(chapter.lockerPos.z) - 3}
+                      width="6"
+                      height="6"
+                      fill="#6366f1"
+                    />
+                    {/* Mapa de Parede */}
+                    <rect
+                      x={mapX(chapter.wallMapPos.x) - 3}
+                      y={mapZ(chapter.wallMapPos.z) - 3}
+                      width="6"
+                      height="6"
+                      fill="#eab308"
+                    />
+                    {/* Itens não coletados */}
+                    {!hasKitPickup && (
+                      <circle
+                        cx={mapX(chapter.kitPos.x)}
+                        cy={mapZ(chapter.kitPos.z)}
+                        r="3.5"
+                        fill="#10b981"
                       />
-                    );
-                  })}
-                  {/* Comporta Norte */}
-                  <rect
-                    x={mapX(chapter.exitPos.x - 1.3)}
-                    y={mapZ(chapter.exitPos.z + 0.3)}
-                    width={mapX(chapter.exitPos.x + 1.3) - mapX(chapter.exitPos.x - 1.3)}
-                    height="5"
-                    fill={doorUnlocked ? "#10b981" : "#ef4444"}
-                  />
-                  {/* Painel de Relés */}
-                  <circle
-                    cx={mapX(chapter.relayPos.x)}
-                    cy={mapZ(chapter.relayPos.z - 0.3)}
-                    r="4"
-                    fill={relaySolved ? "#10b981" : "#f59e0b"}
-                  />
-                  {/* Armário Esconderijo */}
-                  <rect
-                    x={mapX(chapter.lockerPos.x) - 3}
-                    y={mapZ(chapter.lockerPos.z) - 3}
-                    width="6"
-                    height="6"
-                    fill="#6366f1"
-                  />
-                  {/* Itens não coletados */}
-                  {!hasKitPickup && (
-                    <circle
-                      cx={mapX(chapter.kitPos.x)}
-                      cy={mapZ(chapter.kitPos.z)}
-                      r="3.5"
-                      fill="#10b981"
-                    />
-                  )}
-                  {!hasBadgePickup && (
-                    <circle
-                      cx={mapX(chapter.badgePos.x)}
-                      cy={mapZ(chapter.badgePos.z)}
-                      r="3.5"
-                      fill="#f59e0b"
-                    />
-                  )}
+                    )}
+                    {!hasBadgePickup && (
+                      <circle
+                        cx={mapX(chapter.badgePos.x)}
+                        cy={mapZ(chapter.badgePos.z)}
+                        r="3.5"
+                        fill="#f59e0b"
+                      />
+                    )}
+                  </g>
                   {/* Arthur */}
                   <circle
                     cx={mapX(telemetry.playerX)}
@@ -344,6 +385,13 @@ export const PaddModal: React.FC<PaddModalProps> = ({
                 <h3 className="font-display text-sm font-bold text-cyan-300">
                   {chapter.title}
                 </h3>
+                {!wallMapDiscovered && (
+                  <div className="border border-amber-500/45 bg-amber-950/35 p-2.5 text-[11px] text-amber-200">
+                    Planta bloqueada por névoa. Escaneie o{" "}
+                    <strong>Mapa de Parede (&ldquo;Você está aqui&rdquo;)</strong>{" "}
+                    no setor para revelar todo o esquema.
+                  </div>
+                )}
                 <ul className="space-y-1.5 font-mono-tabular">
                   <li className="flex items-center gap-2">
                     <span className="h-2.5 w-2.5 bg-sky-400" /> Arthur Vance (Posição Atual)
@@ -357,13 +405,15 @@ export const PaddModal: React.FC<PaddModalProps> = ({
                     {relaySolved ? "ENERGIZADO" : "SEM ENERGIA"}
                   </li>
                   <li className="flex items-center gap-2">
-                    <span className="h-2.5 w-2.5 bg-indigo-400" /> Armário Esconderijo (Proteção Total)
+                    <span className="h-2.5 w-2.5 bg-cyan-400" /> Trava de Contenção (Bloqueia Newborn 6s)
+                  </li>
+                  <li className="flex items-center gap-2">
+                    <span className="h-2.5 w-2.5 bg-indigo-400" /> Armário Esconderijo (Fôlego + Frestas)
                   </li>
                 </ul>
                 <p className="border border-slate-800 bg-[#080c14] p-3 text-slate-400">
-                  Dica de Sobrevivência: O Newborn não possui pálpebras. Apague a
-                  lanterna (L) no breu ou esconda-se no Armário de Aço prendendo a
-                  respiração (Botão Direito).
+                  Dica de Sobrevivência: Ande devagar ou agachado sobre cacos de vidro e
+                  poças. Use a Isca Sonora (G) para desviar o Newborn de rotas estreitas.
                 </p>
               </div>
             </div>
@@ -380,16 +430,47 @@ export const PaddModal: React.FC<PaddModalProps> = ({
                 </p>
               </div>
 
-              <div className="border border-slate-800 bg-[#080c14] p-4">
-                <div className="font-mono-tabular text-xs text-cyan-400">
-                  PROTOCOLO ÉDEN · Aviso Automático da Base
-                </div>
-                <p className="mt-1 text-sm text-slate-300">
-                  &ldquo;Contenção biológica ativa em todo o Complexo Vanguard-7.
-                  Grades térmicas de incineração nos dutos superiores seladas até
-                  autorização de nível Ômega.&rdquo;
-                </p>
-              </div>
+              {chapter.survivorLogs.map((sLog) => {
+                const collected = collectedLogIds.includes(sLog.id);
+                return (
+                  <div
+                    key={sLog.id}
+                    className={`border p-4 ${
+                      collected
+                        ? "border-cyan-500/45 bg-[#09121e]"
+                        : "border-slate-800 bg-[#070a10] opacity-70"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <div className="font-mono-tabular text-xs text-cyan-300">
+                          {collected ? sLog.title : "REGISTRO CRIPTOGRAFADO"}
+                        </div>
+                        <div className="text-[11px] text-slate-400">
+                          {collected
+                            ? `Autor: ${sLog.author}`
+                            : "Explore o setor para recuperar este registro de sobrevivente."}
+                        </div>
+                      </div>
+                      {collected && onReplayLogCue && (
+                        <button
+                          type="button"
+                          onClick={() => onReplayLogCue(sLog.cueId)}
+                          className="flex items-center gap-1.5 border border-cyan-400/60 bg-cyan-950/60 px-2.5 py-1 text-xs font-semibold text-cyan-200 hover:bg-cyan-900"
+                        >
+                          <Volume2 className="h-3.5 w-3.5" />
+                          Reproduzir Áudio
+                        </button>
+                      )}
+                    </div>
+                    {collected && (
+                      <p className="mt-2 text-sm leading-relaxed text-slate-200">
+                        &ldquo;{sLog.text}&rdquo;
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
 
               {pinDiscovered && (
                 <div className="border border-emerald-500/40 bg-emerald-950/30 p-4">

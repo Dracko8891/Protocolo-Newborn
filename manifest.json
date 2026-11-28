@@ -2,70 +2,70 @@
   "jogo": "Protocolo Newborn",
   "repositorio": "Dracko8891/Protocolo-Newborn",
   "versao_manifesto": "1.0.0",
-  "atualizado_em": "2026-11-27T23:53:45.945Z",
+  "atualizado_em": "2026-11-28T11:54:08.123Z",
   "niveis": [
     {
       "id": "fase_01",
       "capitulo": 1,
       "nome": "Cap. 1 · Ala Médica (Quarentena)",
       "versão": "1.0.0",
-      "tamanho_mb": 0.61,
+      "tamanho_mb": 0.71,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_01.zip",
-      "sha256_hash": "3664d598419878f8a69006911e819a07f07d6221f5b0cea7634a462c903dc5e2"
+      "sha256_hash": "7ebfb561262aa9394a76e973ff9300e34e3c2e3f2a6b10e230fda318139489f4"
     },
     {
       "id": "fase_02",
       "capitulo": 2,
       "nome": "Cap. 2 · Átrio Azul Frio",
       "versão": "1.0.0",
-      "tamanho_mb": 0.6,
+      "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_02.zip",
-      "sha256_hash": "8ddee75ed8dfd6d151d2424731286761bc7f4508d2f8f237250e79040d17e437"
+      "sha256_hash": "1d906573ed3a82acc0745fda9ee5fa4a314437eedb00fc86c6e8879b466a8bca"
     },
     {
       "id": "fase_03",
       "capitulo": 3,
       "nome": "Cap. 3 · Alojamentos da Equipe",
       "versão": "1.0.0",
-      "tamanho_mb": 0.6,
+      "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_03.zip",
-      "sha256_hash": "195d32a2f350aded8b339a69c1a416e7193f03979ac97d6afafe4f6048e2d81a"
+      "sha256_hash": "38a75ccff8cccc5f6ffbb12116544923fc598b378a9dd1090be4591cf0268c48"
     },
     {
       "id": "fase_04",
       "capitulo": 4,
       "nome": "Cap. 4 · Bio-Tanques (Câmara 00)",
       "versão": "1.0.0",
-      "tamanho_mb": 0.61,
+      "tamanho_mb": 0.72,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_04.zip",
-      "sha256_hash": "1bd9bb5ba73abe51fbbe862a77c421ab4a8d216a0883a4e436ed9bd847ba157a"
+      "sha256_hash": "ffc2abc572250f8a4234d95724e99f18585418701b09ffc38a959a72458576ce"
     },
     {
       "id": "fase_05",
       "capitulo": 5,
       "nome": "Cap. 5 · Engenharia & Núcleo Azul",
       "versão": "1.0.0",
-      "tamanho_mb": 0.6,
+      "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_05.zip",
-      "sha256_hash": "4ff0044094d80661e3680899a9b518a6d0a70b7732c9e91faa7e5986cee9e1c4"
+      "sha256_hash": "b5a871f7d53bcd134f44ac67b2616a11e566dbe171c3889aa5f58e5afdae0ae8"
     },
     {
       "id": "fase_06",
       "capitulo": 6,
       "nome": "Cap. 6 · Bloco Ômega (Titânio Negro)",
       "versão": "1.0.0",
-      "tamanho_mb": 0.6,
+      "tamanho_mb": 0.71,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_06.zip",
-      "sha256_hash": "fc50a60088ed7b02681b742abb7df7ef32ed2067d40304c03ab9eeb889e4c1d5"
+      "sha256_hash": "e521df00f2884098f600b00dd5858041a19e128896a0f6654389a14a6b08bd2a"
     },
     {
       "id": "fase_07",
       "capitulo": 7,
       "nome": "Cap. 7 · Hangar de Carga & Exterior",
       "versão": "1.0.0",
-      "tamanho_mb": 0.61,
+      "tamanho_mb": 0.72,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_07.zip",
-      "sha256_hash": "470ee6eb552f25e956950f0aaebbd371b071325eb8a2ef90494383c9ef0129b7"
+      "sha256_hash": "0a3213ad4bfbe264c8e72f8942c7c1ab445f0116e8d0bf61d77accde71fb77e8"
     }
   ]
 }

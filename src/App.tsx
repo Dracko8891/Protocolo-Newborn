@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  Award,
   Cpu,
   CloudDownload,
+  Eye,
   Film,
   Flashlight,
   Footprints,
@@ -14,6 +16,7 @@ import {
   Play,
   Radio,
   RotateCcw,
+  RotateCw,
   Settings,
   ShieldAlert,
   Smartphone,
@@ -39,15 +42,21 @@ import {
 import {
   CHAPTER_CONFIGS,
   ChapterId,
+  ChapterRecord,
   ControlMode,
+  DIFFICULTY_PARAMS,
+  DifficultyMode,
   GamePhase,
+  GraphicsPreset,
   HealthState,
+  IncidentReportData,
   InventoryItem,
   PHYSICS_PARAMS,
   RelayState,
   addItemToInventory,
   computeExponentialHeartbeatPulse,
   computeHeartbeatIntervalMs,
+  computeIncidentReportRank,
   resolveTouchControlsActive,
 } from "./game/gameLogic";
 import {
@@ -103,6 +112,11 @@ const INITIAL_TELEMETRY: LiveTelemetry = {
   panicPct: 8,
   heartRateBpm: 72,
   radialBlurStrength: 0,
+  stealthExposurePct: 35,
+  containmentActiveSec: 0,
+  containmentCooldownSec: 0,
+  directorWarning: false,
+  decoyActiveSec: 0,
 };
 
 function formatDuration(sec: number): string {
@@ -137,6 +151,7 @@ export default function App() {
     holdBreath: false,
     sprint: false,
     dynamo: false,
+    stealthMove: false,
     touchSensitivity: 1.0,
   });
   const joystickRef = useRef<HTMLDivElement | null>(null);
@@ -153,6 +168,9 @@ export default function App() {
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [hasKitPickup, setHasKitPickup] = useState(false);
   const [hasBadgePickup, setHasBadgePickup] = useState(false);
+  const [hasDecoyPickup, setHasDecoyPickup] = useState(false);
+  const [wallMapDiscovered, setWallMapDiscovered] = useState(false);
+  const [collectedLogIds, setCollectedLogIds] = useState<string[]>([]);
   const [pinDiscovered, setPinDiscovered] = useState(false);
   const [relayState, setRelayState] = useState<RelayState>({
     pin2Color: "none",
@@ -164,6 +182,68 @@ export default function App() {
   const [telemetry, setTelemetry] = useState<LiveTelemetry>(INITIAL_TELEMETRY);
   const [muted, setMuted] = useState(false);
   const [photosensitiveMode, setPhotosensitiveMode] = useState(false);
+  const [difficulty, setDifficulty] = useState<DifficultyMode>(() => {
+    if (typeof window === "undefined") return "sobrevivencia";
+    try {
+      const saved = localStorage.getItem("vanguard7.difficulty");
+      if (saved === "historia" || saved === "sobrevivencia" || saved === "extremo") {
+        return saved;
+      }
+    } catch {
+      // ignora
+    }
+    return "sobrevivencia";
+  });
+  const [graphicsPreset, setGraphicsPreset] = useState<GraphicsPreset>(() => {
+    if (typeof window === "undefined") return "auto";
+    try {
+      const saved = localStorage.getItem("vanguard7.graphicsPreset");
+      if (
+        saved === "auto" ||
+        saved === "desempenho" ||
+        saved === "equilibrado" ||
+        saved === "qualidade"
+      ) {
+        return saved;
+      }
+    } catch {
+      // ignora
+    }
+    return "auto";
+  });
+  const [brightness, setBrightness] = useState<number>(() => {
+    if (typeof window === "undefined") return 1.05;
+    try {
+      const saved = Number(localStorage.getItem("vanguard7.brightness"));
+      return Number.isFinite(saved) && saved >= 0.75 && saved <= 1.45 ? saved : 1.05;
+    } catch {
+      return 1.05;
+    }
+  });
+  const [hapticsEnabled, setHapticsEnabled] = useState<boolean>(() => {
+    if (typeof window === "undefined") return true;
+    try {
+      return localStorage.getItem("vanguard7.haptics") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [chapterRecords, setChapterRecords] = useState<Partial<Record<ChapterId, ChapterRecord>>>(() => {
+    if (typeof window === "undefined") return {};
+    try {
+      const raw = localStorage.getItem("vanguard7.records");
+      return raw ? (JSON.parse(raw) as Partial<Record<ChapterId, ChapterRecord>>) : {};
+    } catch {
+      return {};
+    }
+  });
+  const [alertsCount, setAlertsCount] = useState(0);
+  const [damageHits, setDamageHits] = useState(0);
+  const [extraBufferUsed, setExtraBufferUsed] = useState(false);
+  const [quickTurnSignal, setQuickTurnSignal] = useState(0);
+  const [deployDecoySignal, setDeployDecoySignal] = useState(0);
+  const [containmentTriggerSignal, setContainmentTriggerSignal] = useState(0);
+  const [incidentReport, setIncidentReport] = useState<IncidentReportData | null>(null);
   const [controlMode, setControlMode] = useState<ControlMode>(() => {
     if (typeof window === "undefined") return "auto";
     try {
@@ -269,6 +349,20 @@ export default function App() {
     () => inventory.find((it) => it.id === "kit_estanca")?.quantity ?? 0,
     [inventory]
   );
+  const decoysCount = useMemo(
+    () => inventory.find((it) => it.id === "isca_sonora")?.quantity ?? 0,
+    [inventory]
+  );
+
+  const vibratePattern = useCallback(
+    (pattern: number | number[]) => {
+      if (!hapticsEnabled) return;
+      if (typeof navigator !== "undefined" && typeof navigator.vibrate === "function") {
+        navigator.vibrate(pattern);
+      }
+    },
+    [hapticsEnabled]
+  );
 
   const pausedByModal =
     paddOpen ||
@@ -326,7 +420,7 @@ export default function App() {
     }
   }, [muted, narrationSettings, narrationManager]);
 
-  // Salva preferências dos controles em localStorage e atualiza ref de sensibilidade
+  // Salva preferências dos controles, gráficos e acessibilidade em localStorage
   useEffect(() => {
     mobileInputRef.current.touchSensitivity = touchSensitivity;
     try {
@@ -339,10 +433,22 @@ export default function App() {
         "vanguard7.touchSensitivity",
         String(touchSensitivity)
       );
+      localStorage.setItem("vanguard7.difficulty", difficulty);
+      localStorage.setItem("vanguard7.graphicsPreset", graphicsPreset);
+      localStorage.setItem("vanguard7.brightness", String(brightness));
+      localStorage.setItem("vanguard7.haptics", hapticsEnabled ? "1" : "0");
     } catch {
       // ignora restrições de armazenamento
     }
-  }, [controlMode, touchControlsEnabled, touchSensitivity]);
+  }, [
+    controlMode,
+    touchControlsEnabled,
+    touchSensitivity,
+    difficulty,
+    graphicsPreset,
+    brightness,
+    hapticsEnabled,
+  ]);
 
   // Sincroniza dataset.state para verificação automática e acessibilidade
   useEffect(() => {
@@ -376,6 +482,7 @@ export default function App() {
       mobileInputRef.current.holdBreath = false;
       mobileInputRef.current.sprint = false;
       mobileInputRef.current.dynamo = false;
+      mobileInputRef.current.stealthMove = false;
       joystickPointerId.current = null;
       setJoystickKnob({ x: 0, y: 0 });
     }
@@ -398,6 +505,9 @@ export default function App() {
       const dist = newbornDistRef.current;
       const intensity = Math.max(0.35, Math.min(1.0, (14 - dist) / 12));
       soundEngine.playHeartbeat(intensity);
+      if (dist < 8.5) {
+        vibratePattern(18);
+      }
       beatIntervalMs = computeHeartbeatIntervalMs(dist);
       lastBeatAt = now;
 
@@ -532,6 +642,70 @@ export default function App() {
     }
   }, [phase, narrationManager]);
 
+  const completeChapterVictory = useCallback(() => {
+    const chId = chapterIdRef.current;
+    const rank = computeIncidentReportRank({
+      elapsedSec: runSeconds,
+      alertsCount,
+      damageHits,
+      logsFound: collectedLogIds.length,
+      difficulty,
+    });
+    const report: IncidentReportData = {
+      chapterId: chId,
+      elapsedSec: runSeconds,
+      alertsCount,
+      damageHits,
+      logsFound: collectedLogIds.length,
+      difficulty,
+      rank,
+    };
+    setIncidentReport(report);
+
+    const rankOrder: Record<ChapterRecord["bestRank"], number> = {
+      S: 4,
+      A: 3,
+      B: 2,
+      C: 1,
+    };
+    setChapterRecords((prev) => {
+      const existing = prev[chId];
+      const nextBestRank =
+        !existing || rankOrder[rank] > rankOrder[existing.bestRank]
+          ? rank
+          : existing.bestRank;
+      const nextBestTime =
+        !existing || runSeconds < existing.bestTimeSec
+          ? runSeconds
+          : existing.bestTimeSec;
+      const updated = {
+        ...prev,
+        [chId]: {
+          completed: true,
+          bestTimeSec: nextBestTime,
+          bestRank: nextBestRank,
+          difficulty,
+        },
+      };
+      try {
+        localStorage.setItem("vanguard7.records", JSON.stringify(updated));
+      } catch {
+        // ignora
+      }
+      return updated;
+    });
+
+    soundEngine.playVictoryChord();
+    if (document.pointerLockElement) {
+      document.exitPointerLock?.();
+    }
+    setPhase("victory");
+    void narrationManager.trigger(`chapter_0${chId}_victory`, {
+      chapterId: chId,
+      force: true,
+    });
+  }, [runSeconds, alertsCount, damageHits, collectedLogIds.length, difficulty, soundEngine, narrationManager]);
+
   // Detectar travessia da comporta aberta para vitória
   useEffect(() => {
     if (
@@ -540,17 +714,9 @@ export default function App() {
       telemetry.playerZ >= 12.5 &&
       Math.abs(telemetry.playerX) < 1.8
     ) {
-      soundEngine.playVictoryChord();
-      if (document.pointerLockElement) {
-        document.exitPointerLock?.();
-      }
-      setPhase("victory");
-      void narrationManager.trigger(`chapter_0${chapterIdRef.current}_victory`, {
-        chapterId: chapterIdRef.current,
-        force: true,
-      });
+      completeChapterVictory();
     }
-  }, [phase, doorUnlocked, telemetry.playerX, telemetry.playerZ, soundEngine, narrationManager]);
+  }, [phase, doorUnlocked, telemetry.playerX, telemetry.playerZ, completeChapterVictory]);
 
   const startFreshRun = useCallback(
     (skipIntro = false, nextChapterId?: ChapterId) => {
@@ -564,9 +730,16 @@ export default function App() {
       setInventory([]);
       setHasKitPickup(false);
       setHasBadgePickup(false);
+      setHasDecoyPickup(false);
+      setWallMapDiscovered(false);
+      setCollectedLogIds([]);
       setPinDiscovered(false);
       setRelayState({ pin2Color: "none", pin4Color: "none", solved: false });
       setDoorUnlocked(false);
+      setAlertsCount(0);
+      setDamageHits(0);
+      setExtraBufferUsed(false);
+      setIncidentReport(null);
       setPaddOpen(false);
       setInspectOpen(false);
       setRelayOpen(false);
@@ -736,6 +909,23 @@ export default function App() {
     });
   }, [inventory, health, kitsCount, soundEngine, showToast, narrationManager]);
 
+  const handleDeployDecoy = useCallback(() => {
+    const idx = inventory.findIndex((it) => it.id === "isca_sonora");
+    if (idx === -1) {
+      showToast("Nenhuma Isca Sonora disponível.");
+      return;
+    }
+    setInventory((prev) =>
+      prev
+        .map((it, i) => (i === idx ? { ...it, quantity: it.quantity - 1 } : it))
+        .filter((it) => it.quantity > 0)
+    );
+    setDeployDecoySignal((n) => n + 1);
+    vibratePattern(20);
+    soundEngine.playTricorderChirp();
+    showToast("Isca Sonora lançada! Atraíndo o Newborn por 7s.");
+  }, [inventory, showToast, soundEngine, vibratePattern]);
+
   const handleAction = useCallback(
     (action: GameActionEvent) => {
       if (action.type === "toggle_pause") {
@@ -767,6 +957,10 @@ export default function App() {
       }
       if (action.type === "use_heal") {
         handleUseKit();
+        return;
+      }
+      if (action.type === "use_decoy") {
+        handleDeployDecoy();
         return;
       }
       if (action.type === "interact") {
@@ -810,19 +1004,52 @@ export default function App() {
           void narrationManager.trigger("pickup_badge", {
             chapterId: chapterIdRef.current,
           });
+        } else if (id === "pickup_decoy" && !hasDecoyPickup) {
+          const res = addItemToInventory(inventory, {
+            id: "isca_sonora",
+            name: "Isca Sonora Tática",
+            description: "Emissor acústico. Lance (G) para desviar o Newborn.",
+            category: "tatico",
+            quantity: 1,
+          });
+          if (!res.added) {
+            showToast(res.reason || "Inventário cheio.");
+            return;
+          }
+          setInventory(res.slots);
+          setHasDecoyPickup(true);
+          soundEngine.playTricorderChirp();
+          showToast("Isca Sonora coletada! Pressione [G] ou toque em Isca para lançar.");
+        } else if (id === "wall_map") {
+          setWallMapDiscovered(true);
+          soundEngine.playTricorderChirp();
+          vibratePattern(15);
+          showToast("Planta completa do setor baixada para o PADD!");
+        } else if (id === "containment_door") {
+          setContainmentTriggerSignal((n) => n + 1);
+          vibratePattern([25, 20, 25]);
+          soundEngine.playDoorPneumatic();
+          showToast("Porta de Contenção acionada!");
+        } else if (id === "pickup_log_0" || id === "pickup_log_1") {
+          const idx = id === "pickup_log_1" ? 1 : 0;
+          const spec = activeChapter.survivorLogs[idx];
+          if (spec && !collectedLogIds.includes(spec.id)) {
+            setCollectedLogIds((prev) => [...prev, spec.id]);
+            soundEngine.playTricorderChirp();
+            vibratePattern(15);
+            showToast(`Registro recuperado: ${spec.title}`);
+            void narrationManager.trigger(spec.cueId, {
+              chapterId: chapterIdRef.current,
+              force: true,
+            });
+          }
         } else if (id === "relay_panel") {
           if (document.pointerLockElement) document.exitPointerLock?.();
           setRelayOpen(true);
           soundEngine.playClick(680);
         } else if (id === "exit_door") {
           if (doorUnlocked) {
-            soundEngine.playVictoryChord();
-            if (document.pointerLockElement) document.exitPointerLock?.();
-            setPhase("victory");
-            void narrationManager.trigger(
-              `chapter_0${chapterIdRef.current}_victory`,
-              { chapterId: chapterIdRef.current, force: true }
-            );
+            completeChapterVictory();
           } else {
             if (document.pointerLockElement) document.exitPointerLock?.();
             setKeypadOpen(true);
@@ -839,19 +1066,36 @@ export default function App() {
     [
       activeChapter.badgeName,
       activeChapter.badgeOwner,
+      activeChapter.survivorLogs,
+      collectedLogIds,
+      completeChapterVictory,
       doorUnlocked,
+      handleDeployDecoy,
       handleUseKit,
       hasBadgePickup,
+      hasDecoyPickup,
       hasKitPickup,
       inventory,
       narrationManager,
       relayState.solved,
       showToast,
       soundEngine,
+      vibratePattern,
     ]
   );
 
   const handlePlayerHurt = useCallback(() => {
+    setDamageHits((h) => h + 1);
+    vibratePattern([70, 35, 90]);
+    if (
+      difficulty === "historia" &&
+      !extraBufferUsed &&
+      health === "verde"
+    ) {
+      setExtraBufferUsed(true);
+      showToast("Impacto amortecido pelo traje (Modo História)! Afaste-se rápido.");
+      return;
+    }
     setHealth((prev) => {
       const cur = telemetryRef.current;
       panicLogger.log(
@@ -889,15 +1133,17 @@ export default function App() {
       });
       return "vermelho";
     });
-  }, [kitsCount, showToast, narrationManager]);
+  }, [difficulty, extraBufferUsed, health, kitsCount, showToast, narrationManager, vibratePattern]);
 
   const handleNewbornVentTriggered = useCallback(() => {
+    setAlertsCount((a) => a + 1);
+    vibratePattern([35, 30, 35]);
     showToast("ALERTA: O Newborn caiu do duto de ventilação!");
     void narrationManager.trigger("newborn_vent_drop", {
       chapterId: chapterIdRef.current,
       force: true,
     });
-  }, [showToast, narrationManager]);
+  }, [showToast, narrationManager, vibratePattern]);
 
   const handleGameplayCue = useCallback(
     (cueId: string) => {
@@ -907,6 +1153,11 @@ export default function App() {
     },
     [narrationManager]
   );
+
+  const handleAlertTriggered = useCallback(() => {
+    setAlertsCount((a) => a + 1);
+    vibratePattern(28);
+  }, [vibratePattern]);
 
   const currentObjective = useMemo(() => {
     if (doorUnlocked)
@@ -968,9 +1219,15 @@ export default function App() {
         pausedByModal={pausedByModal}
         health={health}
         photosensitiveMode={photosensitiveMode}
+        difficulty={difficulty}
+        graphicsPreset={graphicsPreset}
+        brightness={brightness}
         kitsCount={kitsCount}
         hasKitPickup={hasKitPickup}
         hasBadgePickup={hasBadgePickup}
+        hasDecoyPickup={hasDecoyPickup}
+        wallMapDiscovered={wallMapDiscovered}
+        collectedLogIds={collectedLogIds}
         relaySolved={relayState.solved}
         doorUnlocked={doorUnlocked}
         soundEngine={soundEngine}
@@ -979,9 +1236,29 @@ export default function App() {
         onPlayerHurt={handlePlayerHurt}
         onNewbornVentTriggered={handleNewbornVentTriggered}
         onGameplayCue={handleGameplayCue}
+        onAlertTriggered={handleAlertTriggered}
+        onSoundTrapTriggered={(kind) =>
+          showToast(
+            kind === "glass"
+              ? "Cuidado! Cacos de vidro denunciaram sua posição!"
+              : "Splash alto na poça! Afaste-se rápido!"
+          )
+        }
+        onAmbushWarning={() => showToast("Barulho nos dutos acima... prepare-se!")}
         resetSignal={resetSignal}
+        quickTurnSignal={quickTurnSignal}
+        deployDecoySignal={deployDecoySignal}
+        containmentTriggerSignal={containmentTriggerSignal}
         mobileInputRef={mobileInputRef}
       />
+
+      {/* Modo Espiar nas Frestas do Armário de Aço */}
+      {phase === "playing" && telemetry.hidingInLocker && (
+        <div
+          aria-hidden="true"
+          className="locker-slits-overlay pointer-events-none fixed inset-0 z-10"
+        />
+      )}
 
       {/* Vinheta de dano com curva exponencial sincronizada ao batimento cardíaco + interferência */}
       {phase === "playing" && (
@@ -997,6 +1274,14 @@ export default function App() {
                   ? `inset 0 0 85px rgba(6, 182, 212, ${telemetry.proximityGlitch * 0.34})`
                   : "inset 0 0 70px rgba(0, 0, 0, 0.45)",
           }}
+        />
+      )}
+
+      {/* Deslocamento cromático sutil nas bordas em pânico máximo */}
+      {phase === "playing" && telemetry.proximityGlitch > 0.6 && !photosensitiveMode && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-15 border-x-2 border-cyan-400/35 shadow-[inset_3px_0_0_rgba(239,68,68,0.35),inset_-3px_0_0_rgba(6,182,212,0.35)]"
         />
       )}
 
@@ -1071,64 +1356,112 @@ export default function App() {
               {activeChapter.introDesc}
             </p>
 
-            {/* Seletor dos 7 capítulos com status de download modular */}
-            <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-4">
-              {([1, 2, 3, 4, 5, 6, 7] as ChapterId[]).map((id) => {
-                const cfg = CHAPTER_CONFIGS[id];
-                const selected = chapterId === id;
-                const dl = cacheSnapshot.chapterDownloads[id];
-                const manifestItem = levelsManifest.niveis.find(
-                  (n) => (n.capitulo ?? levelIdToChapterId(n.id)) === id
-                );
-                const isSaved = dl?.status === "downloaded";
-                const isBusy =
-                  dl?.status === "downloading" || dl?.status === "verifying";
+            {/* Diagrama Vertical do Complexo Vanguard-7 (7 Setores Interligados) */}
+            <div className="mt-3 max-h-[26vh] overflow-y-auto border border-slate-800/80 bg-[#060910]/85 p-2">
+              <div className="mb-1.5 flex items-center justify-between px-1 font-mono-tabular text-[10px] uppercase tracking-wider text-slate-400">
+                <span>Diagrama do Complexo</span>
+                <span>Progresso &amp; Pacotes</span>
+              </div>
+              <div className="relative space-y-1 pl-4">
+                <span
+                  aria-hidden="true"
+                  className="absolute bottom-3 left-1.5 top-3 w-0.5 bg-slate-700/80"
+                />
+                {([1, 2, 3, 4, 5, 6, 7] as ChapterId[]).map((id) => {
+                  const cfg = CHAPTER_CONFIGS[id];
+                  const selected = chapterId === id;
+                  const dl = cacheSnapshot.chapterDownloads[id];
+                  const rec = chapterRecords[id];
+                  const manifestItem = levelsManifest.niveis.find(
+                    (n) => (n.capitulo ?? levelIdToChapterId(n.id)) === id
+                  );
+                  const isSaved = dl?.status === "downloaded";
+                  const isBusy =
+                    dl?.status === "downloading" || dl?.status === "verifying";
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      data-chapter={id}
+                      title={cfg.title}
+                      onClick={() => {
+                        soundEngine.playClick(560 + id * 35);
+                        chapterIdRef.current = id;
+                        setChapterId(id);
+                      }}
+                      className={`relative flex w-full items-center justify-between gap-2 border px-2.5 py-1.5 text-left transition-colors ${
+                        selected
+                          ? "border-amber-400/90 bg-amber-500/20 text-amber-100"
+                          : "border-slate-800 bg-[#090e17]/80 text-slate-300 hover:border-slate-600"
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`absolute -left-3.5 h-2 w-2 border ${
+                          selected
+                            ? "border-amber-300 bg-amber-400"
+                            : rec?.completed
+                              ? "border-emerald-300 bg-emerald-500"
+                              : "border-slate-600 bg-slate-800"
+                        }`}
+                      />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 font-mono-tabular text-[10px] uppercase tracking-wider">
+                          <span className="font-bold">Setor 0{id}</span>
+                          <span className="truncate font-sans text-[11px] font-semibold normal-case text-slate-100">
+                            {cfg.shortLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2 font-mono-tabular text-[10px]">
+                        {rec?.completed && (
+                          <span className="text-emerald-300">
+                            ✓ {rec.bestRank} · {formatDuration(rec.bestTimeSec)}
+                          </span>
+                        )}
+                        <span
+                          className={
+                            isSaved
+                              ? "text-emerald-400"
+                              : isBusy
+                                ? "text-cyan-300"
+                                : "text-slate-400"
+                          }
+                        >
+                          {isSaved
+                            ? "Offline"
+                            : isBusy
+                              ? `${dl?.progressPct ?? 0}%`
+                              : `${(manifestItem?.tamanho_mb ?? 10).toFixed(0)}MB`}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Seletor de Dificuldade */}
+            <div className="mt-2.5 grid grid-cols-3 gap-1.5">
+              {(["historia", "sobrevivencia", "extremo"] as DifficultyMode[]).map((d) => {
+                const cfg = DIFFICULTY_PARAMS[d];
+                const active = difficulty === d;
                 return (
                   <button
-                    key={id}
+                    key={d}
                     type="button"
-                    data-chapter={id}
-                    title={cfg.title}
-                    onClick={() => {
-                      soundEngine.playClick(560 + id * 35);
-                      chapterIdRef.current = id;
-                      setChapterId(id);
-                    }}
-                    className={`border px-2 py-1.5 text-left transition-colors ${
-                      selected
-                        ? "border-amber-400/90 bg-amber-500/20 text-amber-200"
-                        : "border-slate-700/70 bg-[#080c14]/75 text-slate-400 hover:border-slate-500 hover:text-slate-200"
+                    data-difficulty={d}
+                    title={cfg.desc}
+                    onClick={() => setDifficulty(d)}
+                    className={`border px-2 py-1 text-left transition-colors ${
+                      active
+                        ? d === "extremo"
+                          ? "border-rose-400 bg-rose-950/55 text-rose-100"
+                          : "border-cyan-400 bg-cyan-950/55 text-cyan-100"
+                        : "border-slate-700/80 bg-[#080c14]/75 text-slate-400 hover:text-slate-200"
                     }`}
                   >
-                    <div className="flex items-center justify-between font-mono-tabular text-[10px] uppercase tracking-wider">
-                      <span>Cap. 0{id}</span>
-                      <span
-                        className={
-                          isSaved
-                            ? "text-emerald-400"
-                            : isBusy
-                              ? "text-cyan-300"
-                              : "text-slate-500"
-                        }
-                      >
-                        {isSaved
-                          ? "Offline"
-                          : isBusy
-                            ? `${dl?.progressPct ?? 0}%`
-                            : `${(manifestItem?.tamanho_mb ?? 10).toFixed(0)}MB`}
-                      </span>
-                    </div>
-                    <div className="truncate text-[11px] font-semibold">
-                      {cfg.shortLabel}
-                    </div>
-                    {isBusy && (
-                      <div className="mt-1 h-1 w-full bg-slate-900">
-                        <div
-                          className="h-full bg-cyan-400 transition-[width]"
-                          style={{ width: `${dl?.progressPct ?? 0}%` }}
-                        />
-                      </div>
-                    )}
+                    <div className="text-[11px] font-bold leading-tight">{cfg.label}</div>
                   </button>
                 );
               })}
@@ -1336,7 +1669,13 @@ export default function App() {
 
       {/* HUD MINIMALISTA E SEMI-TRANSPARENTE (>= 90% cena escura livre) */}
       {phase === "playing" && !pausedByModal && (
-        <div className="safe-area-hud pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-5">
+        <div
+          className={`safe-area-hud pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-5 ${
+            telemetry.proximityGlitch > 0.6 && !photosensitiveMode
+              ? "hud-chromatic-glitch"
+              : ""
+          }`}
+        >
           {/* Topo: Telemetria nua no canto esquerdo + ícones translúcidos no canto direito */}
           <div className="flex items-start justify-between gap-2 sm:gap-4">
             <div className="min-w-0 space-y-1 opacity-85 drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">
@@ -1368,6 +1707,11 @@ export default function App() {
                   )}
                 </span>
 
+                <span className="flex items-center gap-1 text-slate-300/85">
+                  <Eye className="h-3 w-3 text-cyan-300" />
+                  <span>Exp {telemetry.stealthExposurePct}%</span>
+                </span>
+
                 <span className="text-slate-300/80">
                   {telemetry.noiseM.toFixed(0)}m
                 </span>
@@ -1375,6 +1719,11 @@ export default function App() {
                 {telemetry.hidingInLocker && (
                   <span className="text-cyan-300">
                     Fôlego {telemetry.breathSec.toFixed(1)}s
+                  </span>
+                )}
+                {telemetry.containmentActiveSec > 0 && (
+                  <span className="text-emerald-300">
+                    Contenção {telemetry.containmentActiveSec.toFixed(1)}s
                   </span>
                 )}
               </div>
@@ -1415,7 +1764,7 @@ export default function App() {
               >
                 <Smartphone className="h-3.5 w-3.5" />
                 <span
-                  className={`h-1.5 w-1.5 rounded-full ${
+                  className={`h-1.5 w-1.5 ${
                     touchControlsEnabled ? "bg-emerald-400" : "bg-slate-600"
                   }`}
                 />
@@ -1571,6 +1920,9 @@ export default function App() {
                   dy = (dy / dist) * maxR;
                 }
                 setJoystickKnob({ x: dx, y: dy });
+                const ratio = maxR > 0 ? dist / maxR : 0;
+                mobileInputRef.current.stealthMove = ratio > 0.05 && ratio <= 0.6;
+                mobileInputRef.current.sprint = ratio > 0.85;
                 mobileInputRef.current.moveX = (dx / maxR) * touchSensitivity;
                 mobileInputRef.current.moveY = (-dy / maxR) * touchSensitivity;
                 triggerTouchPulse("joystick");
@@ -1589,6 +1941,9 @@ export default function App() {
                   dy = (dy / dist) * maxR;
                 }
                 setJoystickKnob({ x: dx, y: dy });
+                const ratio = maxR > 0 ? dist / maxR : 0;
+                mobileInputRef.current.stealthMove = ratio > 0.05 && ratio <= 0.6;
+                mobileInputRef.current.sprint = ratio > 0.85;
                 mobileInputRef.current.moveX = (dx / maxR) * touchSensitivity;
                 mobileInputRef.current.moveY = (-dy / maxR) * touchSensitivity;
               }}
@@ -1598,6 +1953,8 @@ export default function App() {
                   setJoystickKnob({ x: 0, y: 0 });
                   mobileInputRef.current.moveX = 0;
                   mobileInputRef.current.moveY = 0;
+                  mobileInputRef.current.stealthMove = false;
+                  mobileInputRef.current.sprint = false;
                 }
               }}
               onPointerCancel={() => {
@@ -1605,6 +1962,8 @@ export default function App() {
                 setJoystickKnob({ x: 0, y: 0 });
                 mobileInputRef.current.moveX = 0;
                 mobileInputRef.current.moveY = 0;
+                mobileInputRef.current.stealthMove = false;
+                mobileInputRef.current.sprint = false;
               }}
               className={`relative flex h-[clamp(5.75rem,14vmin,8.25rem)] w-[clamp(5.75rem,14vmin,8.25rem)] touch-none items-center justify-center rounded-full border border-white/25 bg-black/40 shadow-lg transition-transform duration-150 ${touchPulseClass("joystick")}`}
             >
@@ -1703,6 +2062,17 @@ export default function App() {
                 <Cpu className="h-3.5 w-3.5" />
                 Tricorder
               </button>
+              {decoysCount > 0 && (
+                <button
+                  type="button"
+                  aria-label="Lançar Isca Sonora"
+                  onClick={() => triggerTouchPulse("decoy", handleDeployDecoy)}
+                  className={`col-span-2 flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-cyan-400/60 bg-cyan-950/70 px-2 text-[10px] font-semibold text-cyan-100 transition-transform duration-150 ${touchPulseClass("decoy")}`}
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  Isca ({decoysCount})
+                </button>
+              )}
               <button
                 type="button"
                 aria-label="Recarregar dínamo"
@@ -1727,6 +2097,19 @@ export default function App() {
             </div>
 
             <div className="flex gap-1">
+              <button
+                type="button"
+                aria-label="Virar 180 graus"
+                onClick={() =>
+                  triggerTouchPulse("turn180", () =>
+                    setQuickTurnSignal((n) => n + 1)
+                  )
+                }
+                className={`flex h-[clamp(2.35rem,5.5vh,2.8rem)] items-center gap-1 border border-white/25 bg-black/50 px-2 text-[10px] font-bold text-slate-200 transition-transform duration-150 ${touchPulseClass("turn180")}`}
+              >
+                <RotateCw className="h-3 w-3" />
+                180°
+              </button>
               <button
                 type="button"
                 aria-label="Girar câmera para esquerda"
@@ -1784,10 +2167,26 @@ export default function App() {
                     }
                   })
                 }
-                className={`flex h-[clamp(2.35rem,5.5vh,2.8rem)] items-center gap-1.5 border border-amber-400/55 bg-black/55 px-2.5 sm:px-3 text-[11px] font-bold text-amber-200 transition-transform duration-150 ${touchPulseClass("interagir", "amber")}`}
+                className={`flex h-[clamp(2.35rem,5.5vh,2.8rem)] items-center gap-1.5 border px-2.5 sm:px-3 text-[11px] font-bold transition-transform duration-150 ${
+                  telemetry.nearbyId || telemetry.hidingInLocker
+                    ? "border-amber-300 bg-amber-500/35 text-amber-100 ring-2 ring-amber-400/75"
+                    : "border-amber-400/55 bg-black/55 text-amber-200"
+                } ${touchPulseClass("interagir", "amber")}`}
               >
                 <Hand className="h-3.5 w-3.5" />
-                {telemetry.hidingInLocker ? "Sair" : "Interagir"}
+                {telemetry.hidingInLocker
+                  ? "Sair"
+                  : telemetry.nearbyId === "wall_map"
+                    ? "Mapa"
+                    : telemetry.nearbyId === "containment_door"
+                      ? "Travar"
+                      : telemetry.nearbyId === "relay_panel"
+                        ? "Relés"
+                        : telemetry.nearbyId === "exit_door"
+                          ? "Comporta"
+                          : telemetry.nearbyId?.startsWith("pickup_")
+                            ? "Pegar"
+                            : "Interagir"}
               </button>
             </div>
           </div>
@@ -1948,29 +2347,63 @@ export default function App() {
         </div>
       )}
 
-      {/* MODAL DE VITÓRIA (GANCHO TRÁGICO E PROGRESSÃO ENTRE CAPÍTULOS) */}
+      {/* MODAL DE VITÓRIA (RELATÓRIO DE INCIDENTE + RANK S/A/B/C) */}
       {phase === "victory" && (
         <div
           role="dialog"
           aria-modal="true"
           aria-label={`Capítulo ${chapterId} Concluído`}
-          className="fixed inset-0 z-30 flex items-center justify-center bg-[#06080d]/90 p-4"
+          className="fixed inset-0 z-30 flex items-center justify-center overflow-y-auto bg-[#06080d]/92 p-4"
         >
-          <div className="w-full max-w-lg border border-emerald-500/60 bg-[#0b1218] p-7 shadow-2xl">
-            <div className="font-mono-tabular text-xs uppercase tracking-widest text-emerald-400">
-              Capítulo {chapterId} Concluído · Comporta Aberta
+          <div className="my-auto w-full max-w-lg border border-emerald-500/60 bg-[#0b1218] p-6 sm:p-7 shadow-2xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="font-mono-tabular text-xs uppercase tracking-widest text-emerald-400">
+                  Relatório de Incidente · Capítulo 0{chapterId}
+                </div>
+                <h2 className="mt-1 font-display text-2xl sm:text-3xl font-bold text-slate-50">
+                  {activeChapter.victoryTitle}
+                </h2>
+              </div>
+              <div className="flex flex-col items-center border border-amber-400/60 bg-amber-950/35 px-3 py-1.5 text-center">
+                <span className="flex items-center gap-1 font-mono-tabular text-[10px] uppercase text-amber-300">
+                  <Award className="h-3 w-3" /> Nota
+                </span>
+                <span className="font-display text-2xl font-bold text-amber-300">
+                  {incidentReport?.rank ?? "B"}
+                </span>
+              </div>
             </div>
-            <h2 className="mt-2 font-display text-3xl font-bold text-slate-50">
-              {activeChapter.victoryTitle}
-            </h2>
+
             <p className="mt-3 text-sm leading-relaxed text-slate-300">
               {activeChapter.victoryDesc}
             </p>
 
-            <div className="mt-4 grid grid-cols-3 gap-2 border border-slate-800 bg-[#070b10] p-3 font-mono-tabular text-xs text-slate-300">
-              <div>Tempo: {formatDuration(runSeconds)}</div>
-              <div>Saúde: {health === "verde" ? "Estável" : "Ferido"}</div>
-              <div>Bateria: {batteryPct}%</div>
+            <div className="mt-4 grid grid-cols-2 gap-2 border border-slate-800 bg-[#070b10] p-3 font-mono-tabular text-xs text-slate-300 sm:grid-cols-4">
+              <div>
+                <div className="text-[10px] text-slate-500">TEMPO TOTAL</div>
+                <div className="font-bold text-slate-100">
+                  {formatDuration(incidentReport?.elapsedSec ?? runSeconds)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500">ALERTAS</div>
+                <div className="font-bold text-amber-300">
+                  {incidentReport?.alertsCount ?? alertsCount}
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500">DANO SOFRIDO</div>
+                <div className="font-bold text-rose-300">
+                  {incidentReport?.damageHits ?? damageHits}x
+                </div>
+              </div>
+              <div>
+                <div className="text-[10px] text-slate-500">LOGS</div>
+                <div className="font-bold text-cyan-300">
+                  {incidentReport?.logsFound ?? collectedLogIds.length}/2
+                </div>
+              </div>
             </div>
 
             <div className="mt-5 flex flex-wrap gap-3">
@@ -2030,8 +2463,14 @@ export default function App() {
           hasKitPickup={hasKitPickup}
           hasBadgePickup={hasBadgePickup}
           pinDiscovered={pinDiscovered}
+          wallMapDiscovered={wallMapDiscovered}
+          collectedLogIds={collectedLogIds}
           onUseItem={(id) => {
             if (id === "kit_estanca") handleUseKit();
+            else if (id === "isca_sonora") {
+              setPaddOpen(false);
+              handleDeployDecoy();
+            }
           }}
           onInspectItem={(id) => {
             if (id === "cracha_supervisor") {
@@ -2042,6 +2481,12 @@ export default function App() {
           onDiscardItem={(id) => {
             setInventory((prev) => prev.filter((it) => it.id !== id));
             showToast("Item descartado do PADD.");
+          }}
+          onReplayLogCue={(cueId) => {
+            void narrationManager.trigger(cueId, {
+              chapterId: chapterIdRef.current,
+              force: true,
+            });
           }}
           onOpenStudio={() => {
             setPaddOpen(false);
@@ -2087,6 +2532,7 @@ export default function App() {
           }}
           onShortCircuit={() => {
             soundEngine.playHurt();
+            vibratePattern([45, 25, 45]);
             showToast("Curto-circuito nos relés! Evite o canal vermelho!");
             void narrationManager.trigger("relay_short_circuit", {
               chapterId: chapterIdRef.current,
@@ -2127,6 +2573,12 @@ export default function App() {
           onChangeTouchSensitivity={setTouchSensitivity}
           photosensitiveMode={photosensitiveMode}
           onTogglePhotosensitive={setPhotosensitiveMode}
+          graphicsPreset={graphicsPreset}
+          onChangeGraphicsPreset={setGraphicsPreset}
+          brightness={brightness}
+          onChangeBrightness={setBrightness}
+          hapticsEnabled={hapticsEnabled}
+          onToggleHaptics={setHapticsEnabled}
           narrationSettings={narrationSettings}
           onChangeNarrationSettings={(patch) =>
             setNarrationSettings((prev) => ({ ...prev, ...patch }))

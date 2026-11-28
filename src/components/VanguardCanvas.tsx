@@ -6,17 +6,25 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import {
   ChapterConfig,
+  DIFFICULTY_PARAMS,
+  DifficultyMode,
+  DirectorWavePhase,
   GamePhase,
+  GraphicsPreset,
   HealthState,
   NewbornAIState,
   PHYSICS_PARAMS,
+  advanceDirectorWave,
   computeDollyZoomFov,
   computePanicMetrics,
   computeResponsiveFov,
+  computeStealthExposurePct,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
+  isMobileOrTabletDevice,
   resolveCircleWallCollision,
+  resolveEffectiveGraphics,
 } from "../game/gameLogic";
 import { panicLogger } from "../game/panicLogger";
 import { buildFlashlightCookieTexture } from "../game/resourceCache";
@@ -51,10 +59,22 @@ export interface LiveTelemetry {
   panicPct: number;
   heartRateBpm: number;
   radialBlurStrength: number;
+  stealthExposurePct: number;
+  containmentActiveSec: number;
+  containmentCooldownSec: number;
+  directorWarning: boolean;
+  decoyActiveSec: number;
 }
 
 export interface GameActionEvent {
-  type: "interact" | "use_heal" | "toggle_padd" | "toggle_map" | "toggle_pause" | "toggle_mute";
+  type:
+    | "interact"
+    | "use_heal"
+    | "use_decoy"
+    | "toggle_padd"
+    | "toggle_map"
+    | "toggle_pause"
+    | "toggle_mute";
   targetId?: string;
 }
 
@@ -64,9 +84,15 @@ interface VanguardCanvasProps {
   pausedByModal: boolean;
   health: HealthState;
   photosensitiveMode: boolean;
+  difficulty?: DifficultyMode;
+  graphicsPreset?: GraphicsPreset;
+  brightness?: number;
   kitsCount?: number;
   hasKitPickup: boolean;
   hasBadgePickup: boolean;
+  hasDecoyPickup?: boolean;
+  wallMapDiscovered?: boolean;
+  collectedLogIds?: string[];
   relaySolved: boolean;
   doorUnlocked: boolean;
   soundEngine: SoundEngine;
@@ -75,7 +101,13 @@ interface VanguardCanvasProps {
   onPlayerHurt: () => void;
   onNewbornVentTriggered: () => void;
   onGameplayCue?: (cueId: string) => void;
+  onAlertTriggered?: () => void;
+  onSoundTrapTriggered?: (kind: "glass" | "puddle") => void;
+  onAmbushWarning?: () => void;
   resetSignal: number;
+  quickTurnSignal?: number;
+  deployDecoySignal?: number;
+  containmentTriggerSignal?: number;
   mobileInputRef: React.MutableRefObject<{
     moveX: number;
     moveY: number;
@@ -84,6 +116,7 @@ interface VanguardCanvasProps {
     holdBreath?: boolean;
     sprint?: boolean;
     dynamo?: boolean;
+    stealthMove?: boolean;
     touchSensitivity?: number;
   }>;
 }
@@ -168,6 +201,7 @@ const HorrorPostShader = {
 const _forward = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _lookTarget = new THREE.Vector3();
+const _bloodDummy = new THREE.Object3D();
 
 export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   chapter,
@@ -175,9 +209,15 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   pausedByModal,
   health,
   photosensitiveMode,
+  difficulty = "sobrevivencia",
+  graphicsPreset = "auto",
+  brightness = 1.05,
   kitsCount = 0,
   hasKitPickup,
   hasBadgePickup,
+  hasDecoyPickup = false,
+  wallMapDiscovered = false,
+  collectedLogIds = [],
   relaySolved,
   doorUnlocked,
   soundEngine,
@@ -186,12 +226,19 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   onPlayerHurt,
   onNewbornVentTriggered,
   onGameplayCue,
+  onAlertTriggered,
+  onSoundTrapTriggered,
+  onAmbushWarning,
   resetSignal,
+  quickTurnSignal = 0,
+  deployDecoySignal = 0,
+  containmentTriggerSignal = 0,
   mobileInputRef,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const orientation = useOrientation();
   const syncViewportRef = useRef<(() => void) | null>(null);
+  const applyGraphicsRef = useRef<(() => void) | null>(null);
 
   const stateRef = useRef({
     chapter,
@@ -199,9 +246,15 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     pausedByModal,
     health,
     photosensitiveMode,
+    difficulty,
+    graphicsPreset,
+    brightness,
     kitsCount,
     hasKitPickup,
     hasBadgePickup,
+    hasDecoyPickup,
+    wallMapDiscovered,
+    collectedLogIds,
     relaySolved,
     doorUnlocked,
     onTelemetry,
@@ -209,6 +262,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onPlayerHurt,
     onNewbornVentTriggered,
     onGameplayCue,
+    onAlertTriggered,
+    onSoundTrapTriggered,
+    onAmbushWarning,
   });
 
   stateRef.current = {
@@ -217,9 +273,15 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     pausedByModal,
     health,
     photosensitiveMode,
+    difficulty,
+    graphicsPreset,
+    brightness,
     kitsCount,
     hasKitPickup,
     hasBadgePickup,
+    hasDecoyPickup,
+    wallMapDiscovered,
+    collectedLogIds,
     relaySolved,
     doorUnlocked,
     onTelemetry,
@@ -227,6 +289,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onPlayerHurt,
     onNewbornVentTriggered,
     onGameplayCue,
+    onAlertTriggered,
+    onSoundTrapTriggered,
+    onAmbushWarning,
   };
 
   const simRef = useRef({
@@ -264,6 +329,22 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     lowBatteryCued: false,
     emptyBatteryCued: false,
     lowBreathCued: false,
+    quickTurnRemaining: 0,
+    containmentActiveSec: 0,
+    containmentCooldownSec: 0,
+    activeDecoyTimer: 0,
+    activeDecoyX: 0,
+    activeDecoyZ: 0,
+    activeDecoyBeepTimer: 0,
+    directorWavePhase: "pressure" as DirectorWavePhase,
+    directorWaveTimer: 0,
+    ambushWarningFired: false,
+    ambushFlickerWarning: false,
+    trapCooldowns: {} as Record<string, number>,
+    bloodDropCount: 0,
+    lastBloodDropX: 0,
+    lastBloodDropZ: -4.2,
+    resetBloodDrops: false,
   });
 
   useEffect(() => {
@@ -298,6 +379,22 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     s.lowBatteryCued = false;
     s.emptyBatteryCued = false;
     s.lowBreathCued = false;
+    s.quickTurnRemaining = 0;
+    s.containmentActiveSec = 0;
+    s.containmentCooldownSec = 0;
+    s.activeDecoyTimer = 0;
+    s.activeDecoyX = 0;
+    s.activeDecoyZ = 0;
+    s.activeDecoyBeepTimer = 0;
+    s.directorWavePhase = "pressure";
+    s.directorWaveTimer = 0;
+    s.ambushWarningFired = false;
+    s.ambushFlickerWarning = false;
+    s.trapCooldowns = {};
+    s.bloodDropCount = 0;
+    s.lastBloodDropX = chapter.spawn.x;
+    s.lastBloodDropZ = chapter.spawn.z;
+    s.resetBloodDrops = true;
   }, [resetSignal, chapter]);
 
   const clearInputsRef = useRef<(() => void) | null>(null);
@@ -310,6 +407,35 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       }
     }
   }, [phase, pausedByModal]);
+
+  useEffect(() => {
+    if (quickTurnSignal <= 0) return;
+    const s = simRef.current;
+    if (stateRef.current.phase !== "playing" || s.hidingInLocker) return;
+    s.quickTurnRemaining = Math.PI;
+    soundEngine.playClick(540);
+  }, [quickTurnSignal, soundEngine]);
+
+  useEffect(() => {
+    if (deployDecoySignal <= 0) return;
+    const s = simRef.current;
+    const ch = stateRef.current.chapter;
+    const tx = s.px + Math.sin(s.yaw) * 0.9;
+    const tz = s.pz + Math.cos(s.yaw) * 0.9;
+    const resolved = resolveCircleWallCollision(tx, tz, 0.22, ch.walls);
+    s.activeDecoyX = resolved.x;
+    s.activeDecoyZ = resolved.z;
+    s.activeDecoyTimer = 7.0;
+    s.activeDecoyBeepTimer = 0.25;
+  }, [deployDecoySignal]);
+
+  useEffect(() => {
+    if (containmentTriggerSignal <= 0) return;
+    const s = simRef.current;
+    if (s.containmentActiveSec <= 0 && s.containmentCooldownSec <= 0) {
+      s.containmentActiveSec = stateRef.current.chapter.containmentDoor.durationSec;
+    }
+  }, [containmentTriggerSignal]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -325,17 +451,38 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
     })();
 
+    const isMobileOrTablet = isMobileOrTabletDevice({
+      hostname: window.location.hostname,
+      userAgent: navigator.userAgent,
+      pointerCoarse: window.matchMedia?.("(pointer: coarse)").matches ?? false,
+      anyPointerCoarse:
+        window.matchMedia?.("(any-pointer: coarse)").matches ?? false,
+      maxTouchPoints: navigator.maxTouchPoints ?? 0,
+      hasOnTouchStart: "ontouchstart" in window,
+    });
+
+    let autoDowngraded = false;
+    const getEffGraphics = () =>
+      resolveEffectiveGraphics(
+        stateRef.current.graphicsPreset,
+        isMobileOrTablet,
+        isSoftwareGl,
+        autoDowngraded
+      );
+
+    const initEff = getEffGraphics();
+
     const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
+      antialias: !isSoftwareGl && !isMobileOrTablet,
       powerPreference: "high-performance",
     });
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.96;
+    renderer.toneMappingExposure = stateRef.current.brightness;
     renderer.setPixelRatio(
-      isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2)
+      Math.min(window.devicePixelRatio || 1, initEff.maxDpr)
     );
-    renderer.shadowMap.enabled = !isSoftwareGl;
+    renderer.shadowMap.enabled = initEff.shadowsEnabled;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     const getViewportSize = () => {
       const vv = window.visualViewport;
@@ -360,7 +507,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     const envTex = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
     scene.environment = envTex;
-    scene.environmentIntensity = 0.16;
+    scene.environmentIntensity = initEff.envIntensity;
     pmremGenerator.dispose();
 
     const initAspect = initW / initH;
@@ -376,22 +523,27 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       stateRef.current.chapter.spawn.z
     );
 
-    // Lanterna Tática Fresnel + Luz do Tricorder acopladas à câmera
+    // Lanterna Tática segura (z = +0.08 atrás do plano frontal p/ nunca entrar na parede em ARM Mali)
     const flashlight = new THREE.SpotLight(
-      0xfff1d6,
-      9.2,
-      24,
-      Math.PI / 5.2,
-      0.45,
-      1.65
+      0xfff2dc,
+      3.8,
+      22,
+      Math.PI / 4.8,
+      0.55,
+      1.35
     );
     flashlight.map = buildFlashlightCookieTexture();
-    flashlight.position.set(0.2, -0.14, -0.15);
-    flashlight.target.position.set(0.02, -0.1, -6.5);
+    flashlight.position.set(0.14, -0.09, 0.08);
+    flashlight.target.position.set(0.02, -0.08, -6.5);
     camera.add(flashlight);
     camera.add(flashlight.target);
 
-    const tricorderLight = new THREE.PointLight(0x06b6d4, 0, 6.5, 1.9);
+    // Luz de preenchimento próxima do jogador para evitar breu absoluto ao encostar em paredes
+    const playerFillLight = new THREE.PointLight(0xdbeafe, 0.42, 4.4, 1.6);
+    playerFillLight.position.set(0, 0.05, 0.06);
+    camera.add(playerFillLight);
+
+    const tricorderLight = new THREE.PointLight(0x06b6d4, 0, 6.5, 1.8);
     tricorderLight.position.set(-0.24, -0.15, -0.45);
     camera.add(tricorderLight);
     scene.add(camera);
@@ -401,12 +553,17 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       camera,
       renderer,
       isSoftwareGl,
-      stateRef.current.chapter
+      stateRef.current.chapter,
+      {
+        texSize: initEff.textureSize,
+        particleDensity: initEff.particleDensity,
+        shadowsEnabled: initEff.shadowsEnabled,
+      }
     );
 
     let composer: EffectComposer | null = null;
     let horrorPass: ShaderPass | null = null;
-    if (!isSoftwareGl) {
+    if (initEff.usePostProcessing) {
       composer = new EffectComposer(renderer);
       composer.setSize(initW, initH);
       composer.addPass(new RenderPass(scene, camera));
@@ -419,6 +576,25 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         renderer.compile(scene, camera);
       }
     }
+
+    const applyGraphicsConfig = () => {
+      const eff = getEffGraphics();
+      renderer.toneMappingExposure = stateRef.current.brightness;
+      renderer.setPixelRatio(
+        Math.min(window.devicePixelRatio || 1, eff.maxDpr)
+      );
+      renderer.shadowMap.enabled = eff.shadowsEnabled;
+      scene.environmentIntensity = eff.envIntensity;
+      if (eff.usePostProcessing && !composer && !isSoftwareGl) {
+        const { w, h } = getViewportSize();
+        composer = new EffectComposer(renderer);
+        composer.setSize(w, h);
+        composer.addPass(new RenderPass(scene, camera));
+        horrorPass = new ShaderPass(HorrorPostShader);
+        composer.addPass(horrorPass);
+      }
+    };
+    applyGraphicsRef.current = applyGraphicsConfig;
 
     const keysHeld = new Set<string>();
     let rmbHeld = false;
@@ -533,16 +709,27 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           );
         } else if (code === "KeyH") {
           st.onAction({ type: "use_heal" });
+        } else if (code === "KeyG") {
+          st.onAction({ type: "use_decoy" });
+        } else if (code === "KeyX") {
+          if (!simRef.current.hidingInLocker) {
+            simRef.current.quickTurnRemaining = Math.PI;
+            soundEngine.playClick(540);
+          }
         } else if (code === "KeyF") {
           const near = findNearestInteractable();
           if (near?.id === "locker_xray") {
-            simRef.current.hidingInLocker = !simRef.current.hidingInLocker;
+            const nextHide = !simRef.current.hidingInLocker;
+            simRef.current.hidingInLocker = nextHide;
             soundEngine.playDoorPneumatic();
-            if (simRef.current.hidingInLocker) {
+            if (nextHide) {
+              const lp = st.chapter.lockerPos;
+              simRef.current.yaw = Math.atan2(lp.hideX - lp.x, lp.hideZ - lp.z);
+              simRef.current.pitch = 0.0;
               st.onGameplayCue?.("locker_enter");
             }
             logResourceEvent(
-              simRef.current.hidingInLocker ? "Escondeu-se no Armário" : "Saiu do Armário"
+              nextHide ? "Escondeu-se no Armário" : "Saiu do Armário"
             );
           } else if (near) {
             st.onAction({ type: "interact", targetId: near.id });
@@ -676,8 +863,9 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     const syncViewportSize = () => {
       const { w, h } = getViewportSize();
       const nextAspect = w / h;
+      const eff = getEffGraphics();
       renderer.setPixelRatio(
-        isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
+        Math.min(window.devicePixelRatio || 1, eff.maxDpr)
       );
       camera.aspect = nextAspect;
       camera.fov = computeResponsiveFov(PHYSICS_PARAMS.defaultFov, nextAspect);
@@ -703,10 +891,31 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       const s = simRef.current;
       const st = stateRef.current;
       let best: { id: string; label: string; dist: number } | null = null;
+      const logsCollected = st.collectedLogIds ?? [];
 
       for (const item of world.interactables) {
         if (item.id === "pickup_kit" && st.hasKitPickup) continue;
         if (item.id === "pickup_badge" && st.hasBadgePickup) continue;
+        if (item.id === "pickup_decoy" && st.hasDecoyPickup) continue;
+        if (item.id === "wall_map" && st.wallMapDiscovered) continue;
+        if (
+          item.id === "pickup_log_0" &&
+          logsCollected.includes(st.chapter.survivorLogs[0].id)
+        ) {
+          continue;
+        }
+        if (
+          item.id === "pickup_log_1" &&
+          logsCollected.includes(st.chapter.survivorLogs[1].id)
+        ) {
+          continue;
+        }
+        if (
+          item.id === "containment_door" &&
+          (s.containmentActiveSec > 0 || s.containmentCooldownSec > 0)
+        ) {
+          continue;
+        }
         const dist = Math.hypot(item.x - s.px, item.z - s.pz);
         if (dist <= PHYSICS_PARAMS.interactRangeM) {
           if (!best || dist < best.dist) {
@@ -788,10 +997,52 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       const s = simRef.current;
       const st = stateRef.current;
 
+      const logsCollected = st.collectedLogIds ?? [];
       world.kitPickup.visible = !st.hasKitPickup;
       world.badgePickup.visible = !st.hasBadgePickup;
+      world.decoyPickup.visible = !st.hasDecoyPickup;
+      world.logPickups[0].visible = !logsCollected.includes(st.chapter.survivorLogs[0].id);
+      world.logPickups[1].visible = !logsCollected.includes(st.chapter.survivorLogs[1].id);
       world.kitPickup.rotation.y = elapsed * 1.4;
       world.badgePickup.rotation.y = -elapsed * 1.2;
+      world.decoyPickup.rotation.y = elapsed * 1.1;
+
+      if (s.resetBloodDrops) {
+        s.resetBloodDrops = false;
+        world.bloodDropsInst.count = 0;
+        world.bloodDropsInst.instanceMatrix.needsUpdate = true;
+      }
+
+      // Mapa de Parede & Porta de Contenção & Isca Ativa
+      const wmHex = st.wallMapDiscovered ? 0x10b981 : 0xf59e0b;
+      world.wallMapStatusMat.color.setHex(wmHex);
+      world.wallMapStatusMat.emissive.setHex(wmHex);
+
+      const cdHex =
+        s.containmentActiveSec > 0
+          ? 0x10b981
+          : s.containmentCooldownSec > 0
+            ? 0xef4444
+            : 0x06b6d4;
+      world.containmentPanelMat.color.setHex(cdHex);
+      world.containmentPanelMat.emissive.setHex(cdHex);
+      const targetContainY = s.containmentActiveSec > 0 ? 1.275 : 3.65;
+      world.containmentDoorMesh.position.y = THREE.MathUtils.damp(
+        world.containmentDoorMesh.position.y,
+        targetContainY,
+        6.5,
+        dt
+      );
+
+      if (s.activeDecoyTimer > 0) {
+        world.activeDecoyGroup.visible = true;
+        world.activeDecoyGroup.position.set(s.activeDecoyX, 0.14, s.activeDecoyZ);
+        world.activeDecoyGroup.rotation.y = elapsed * 5.2;
+        world.activeDecoyLedMat.emissiveIntensity =
+          1.2 + Math.abs(Math.sin(elapsed * 12)) * 2.2;
+      } else {
+        world.activeDecoyGroup.visible = false;
+      }
 
       // Luz de giroflex, fluorescente falhando, núcleo Cap. 5 e faíscas elétricas
       world.beaconLight.intensity = st.photosensitiveMode
@@ -1026,6 +1277,15 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         justPressed(2);
       }
 
+      const diffCfg = DIFFICULTY_PARAMS[st.difficulty ?? "sobrevivencia"];
+
+      // Giro Rápido 180° suave
+      if (s.quickTurnRemaining > 0 && !s.hidingInLocker) {
+        const turnStep = Math.min(s.quickTurnRemaining, (Math.PI / 0.22) * dt);
+        s.yaw += turnStep;
+        s.quickTurnRemaining -= turnStep;
+      }
+
       const mob = mobileInputRef.current;
       s.yaw -= (gpLookX + mob.lookX) * dt * 2.1;
       s.pitch = THREE.MathUtils.clamp(
@@ -1035,6 +1295,39 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       );
       if (keysHeld.has("ArrowLeft")) s.yaw += dt * 1.9;
       if (keysHeld.has("ArrowRight")) s.yaw -= dt * 1.9;
+
+      // Modo Espiar pelas frestas dentro do Armário (limita yaw ao redor da saída do armário)
+      if (s.hidingInLocker) {
+        const lp = st.chapter.lockerPos;
+        const lockerOutYaw = Math.atan2(lp.hideX - lp.x, lp.hideZ - lp.z);
+        const peekYawOffset =
+          ((keysHeld.has("KeyQ") ? 1 : 0) - (keysHeld.has("KeyE") ? 1 : 0)) *
+          dt *
+          1.6;
+        s.yaw += peekYawOffset;
+        const delta = Math.atan2(
+          Math.sin(s.yaw - lockerOutYaw),
+          Math.cos(s.yaw - lockerOutYaw)
+        );
+        const clampedDelta = THREE.MathUtils.clamp(delta, -0.48, 0.48);
+        s.yaw = lockerOutYaw + clampedDelta;
+        s.pitch = THREE.MathUtils.clamp(s.pitch, -0.38, 0.38);
+      }
+
+      // Contenção Temporária + Cooldown + Parede Efetiva
+      if (s.containmentActiveSec > 0) {
+        s.containmentActiveSec = Math.max(0, s.containmentActiveSec - dt);
+        if (s.containmentActiveSec === 0) {
+          s.containmentCooldownSec = 10.0;
+          soundEngine.playDoorPneumatic();
+        }
+      } else if (s.containmentCooldownSec > 0) {
+        s.containmentCooldownSec = Math.max(0, s.containmentCooldownSec - dt);
+      }
+      const effectiveWalls =
+        s.containmentActiveSec > 0
+          ? [...st.chapter.walls, st.chapter.containmentDoor.wall]
+          : st.chapter.walls;
 
       // Dínamo da lanterna
       s.pumpingDynamo =
@@ -1054,7 +1347,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       }
 
       if (s.flashlightOn && s.batterySec > 0) {
-        s.batterySec = Math.max(0, s.batterySec - dt);
+        s.batterySec = Math.max(0, s.batterySec - dt * diffCfg.batteryDrainMult);
         if (s.batterySec <= 0) {
           s.flashlightOn = false;
           if (!s.emptyBatteryCued) {
@@ -1094,16 +1387,20 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         !s.crouching &&
         !s.hidingInLocker;
 
+      const isStealthSlow = Boolean(mob.stealthMove) && !sprinting;
+
       const baseSpeed =
         s.adrenalineTimer > 0
           ? PHYSICS_PARAMS.adrenalineSpeed
           : st.health === "vermelho"
             ? PHYSICS_PARAMS.injuredSpeed
-            : s.crouching
-              ? PHYSICS_PARAMS.crouchSpeed
-              : sprinting
-                ? PHYSICS_PARAMS.sprintSpeed
-                : PHYSICS_PARAMS.walkSpeed;
+            : isStealthSlow
+              ? PHYSICS_PARAMS.crouchSpeed * 0.72
+              : s.crouching
+                ? PHYSICS_PARAMS.crouchSpeed
+                : sprinting
+                  ? PHYSICS_PARAMS.sprintSpeed
+                  : PHYSICS_PARAMS.walkSpeed;
 
       if (!s.hidingInLocker && mag > 0.05) {
         _forward.set(Math.sin(s.yaw), 0, Math.cos(s.yaw)).normalize();
@@ -1115,17 +1412,36 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           nextX,
           nextZ,
           PHYSICS_PARAMS.playerRadius,
-          st.chapter.walls
+          effectiveWalls
         );
         const moved = Math.hypot(resolved.x - s.px, resolved.z - s.pz);
         s.px = resolved.x;
         s.pz = resolved.z;
 
         s.walkDistAccum += moved;
-        const stepLen = s.crouching ? 0.95 : sprinting ? 1.55 : 1.2;
+        const stepLen = isStealthSlow || s.crouching ? 0.95 : sprinting ? 1.55 : 1.2;
         if (s.walkDistAccum >= stepLen) {
           s.walkDistAccum = 0;
-          soundEngine.playFootstep(s.crouching, sprinting);
+          soundEngine.playFootstep(isStealthSlow || s.crouching, sprinting);
+        }
+
+        // Rastro de sangue quando ferido (vermelho)
+        if (
+          st.health === "vermelho" &&
+          Math.hypot(s.px - s.lastBloodDropX, s.pz - s.lastBloodDropZ) >= 0.85
+        ) {
+          s.lastBloodDropX = s.px;
+          s.lastBloodDropZ = s.pz;
+          const idx = s.bloodDropCount % 48;
+          _bloodDummy.position.set(s.px, 0.015, s.pz);
+          _bloodDummy.rotation.set(0, elapsed * 1.7 + idx, 0);
+          const sc = 0.7 + (idx % 4) * 0.18;
+          _bloodDummy.scale.set(sc, 1, sc);
+          _bloodDummy.updateMatrix();
+          world.bloodDropsInst.setMatrixAt(idx, _bloodDummy.matrix);
+          s.bloodDropCount += 1;
+          world.bloodDropsInst.count = Math.min(48, s.bloodDropCount);
+          world.bloodDropsInst.instanceMatrix.needsUpdate = true;
         }
       }
 
@@ -1150,9 +1466,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         }
       }
 
-      // Espiar (Peek Q/E)
-      const peekDir =
-        (keysHeld.has("KeyE") ? 1 : 0) - (keysHeld.has("KeyQ") ? 1 : 0) + gpPeekDir;
+      // Espiar (Peek Q/E fora do armário)
+      const peekDir = s.hidingInLocker
+        ? 0
+        : (keysHeld.has("KeyE") ? 1 : 0) - (keysHeld.has("KeyQ") ? 1 : 0) + gpPeekDir;
       const targetHeight = s.hidingInLocker
         ? 1.32
         : s.crouching
@@ -1190,12 +1507,18 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       camera.lookAt(_lookTarget);
       camera.rotation.z += -peekDir * 0.16;
 
-      // Lanterna Fresnel e Tricorder acoplados ao Viewmodel
-      flashlight.intensity = s.flashlightOn && s.batterySec > 0 ? 9.4 : 0;
+      // Lanterna segura para ARM Mali + aviso visual sutil de emboscada do Diretor
+      const flickerDip =
+        s.ambushFlickerWarning &&
+        !st.photosensitiveMode &&
+        Math.sin(elapsed * 32) > 0.25
+          ? 1.15
+          : 3.8;
+      flashlight.intensity = s.flashlightOn && s.batterySec > 0 ? flickerDip : 0;
       flashlight.target.position.set(0.02, -0.08, -6.5);
-      tricorderLight.intensity = s.tricorderOn ? 2.2 : 0;
+      tricorderLight.intensity = s.tricorderOn ? 1.85 : 0;
 
-      // Cálculo de ruído atual (metros)
+      // Cálculo de ruído atual (metros) + Armadilhas Sonoras + Isca Sonora
       let noiseM = 0;
       if (s.pumpingDynamo) noiseM = Math.max(noiseM, PHYSICS_PARAMS.noiseDynamoM);
       if (s.tricorderOn)
@@ -1205,10 +1528,47 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           noiseM,
           sprinting
             ? PHYSICS_PARAMS.noiseSprintM
-            : s.crouching
-              ? PHYSICS_PARAMS.noiseCrouchM
-              : PHYSICS_PARAMS.noiseWalkM
+            : isStealthSlow
+              ? PHYSICS_PARAMS.noiseCrouchM * 0.55
+              : s.crouching
+                ? PHYSICS_PARAMS.noiseCrouchM
+                : PHYSICS_PARAMS.noiseWalkM
         );
+      }
+
+      for (const tid of Object.keys(s.trapCooldowns)) {
+        if (s.trapCooldowns[tid] > 0) {
+          s.trapCooldowns[tid] = Math.max(0, s.trapCooldowns[tid] - dt);
+        }
+      }
+      if (!s.hidingInLocker && mag > 0.25 && !s.crouching && !isStealthSlow) {
+        for (const trap of st.chapter.soundTraps) {
+          if (
+            (s.trapCooldowns[trap.id] ?? 0) <= 0 &&
+            Math.hypot(s.px - trap.x, s.pz - trap.z) <= trap.radius
+          ) {
+            s.trapCooldowns[trap.id] = 4.0;
+            noiseM = Math.max(noiseM, 14.0);
+            if (trap.kind === "glass") soundEngine.playGlassCrunch();
+            else soundEngine.playPuddleSplash();
+            s.investigateX = trap.x;
+            s.investigateZ = trap.z;
+            if (s.ventDropped && s.directorWavePhase !== "vent_retreat" && s.newbornState === "Patrol") {
+              s.newbornState = "Investigate";
+            }
+            st.onSoundTrapTriggered?.(trap.kind);
+            st.onAlertTriggered?.();
+          }
+        }
+      }
+
+      if (s.activeDecoyTimer > 0) {
+        s.activeDecoyTimer = Math.max(0, s.activeDecoyTimer - dt);
+        s.activeDecoyBeepTimer -= dt;
+        if (s.activeDecoyBeepTimer <= 0) {
+          s.activeDecoyBeepTimer = 0.85;
+          soundEngine.playDecoyBeep();
+        }
       }
 
       // Script inicial Cap. 1 + IA com NavMesh & Raycast de paredes
@@ -1245,146 +1605,212 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           s.newbornState = "Investigate";
           s.investigateX = 3.2;
           s.investigateZ = 11.4;
+          s.directorWavePhase = "pressure";
+          s.directorWaveTimer = 0;
           soundEngine.playHurt();
           st.onNewbornVentTriggered();
         }
-        world.newborn.root.visible = true;
 
-        const dist = Math.hypot(s.nx - s.px, s.nz - s.pz);
-        const lineClear = hasWallLineOfSight(s.nx, s.nz, s.px, s.pz, ch.walls);
-
-        const perc = evaluateNewbornPerception({
-          distanceM: dist,
-          hasLineOfSight: lineClear,
-          flashlightOn: s.flashlightOn,
-          roomLit: false,
-          playerNoiseM: noiseM,
-          playerHidingInLocker: s.hidingInLocker,
-          breathHeld: s.holdingBreath,
-          playerBleeding: st.health === "vermelho",
-          stunTimerSec: s.stunTimer,
-          currentState: s.newbornState,
+        // Diretor de Ondas IA (Pressão <-> Recuo pelos dutos com aviso pré-emboscada)
+        const dirRes = advanceDirectorWave({
+          wavePhase: s.directorWavePhase,
+          timerSec: s.directorWaveTimer,
+          dt,
+          newbornState: s.newbornState,
+          difficulty: st.difficulty ?? "sobrevivencia",
         });
+        s.directorWavePhase = dirRes.wavePhase;
+        s.directorWaveTimer = dirRes.timerSec;
+        s.ambushFlickerWarning = dirRes.ambushFlickerWarning;
 
-        const prevState = s.newbornState;
-        s.newbornState = perc.nextState;
-        if (s.newbornState !== prevState) {
-          if (s.newbornState === "Hunt") {
-            st.onGameplayCue?.("newborn_hunt");
-          } else if (s.newbornState === "Investigate" && prevState !== "Hunt") {
-            st.onGameplayCue?.("newborn_investigate");
-          }
-          const batteryPct = Math.round((s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100);
-          const metrics = computePanicMetrics({
-            health: st.health,
-            newbornDist: dist,
-            newbornVisible: true,
-            newbornState: s.newbornState,
-            batteryPct,
-            flashlightOn: s.flashlightOn,
-            hidingInLocker: s.hidingInLocker,
-            holdingBreath: s.holdingBreath,
-          });
-          panicLogger.log(
-            {
-              event:
-                s.newbornState === "Hunt" || s.newbornState === "Investigate"
-                  ? "detection_trigger"
-                  : "state_transition",
-              detail: `Newborn ${prevState} -> ${s.newbornState} (via ${perc.detectedBy})`,
-              panicPct: Math.round(metrics.panicLevel * 100),
-              heartRateBpm: metrics.estimatedBpm,
-              newbornDistM: dist,
-              newbornState: s.newbornState,
-              health: st.health,
-              resources: {
-                batteryPct,
-                flashlightOn: s.flashlightOn,
-                tricorderOn: s.tricorderOn,
-                hidingInLocker: s.hidingInLocker,
-                kitsRemaining: st.kitsCount,
-              },
-            },
-            true
-          );
-        }
-        if (perc.detectedBy === "sound" || perc.detectedBy === "scent") {
+        if (dirRes.event === "retreat_to_vent") {
+          s.ambushWarningFired = false;
+          soundEngine.playVentCreak();
+        } else if (dirRes.event === "drop_from_vent") {
+          s.nx = 0;
+          s.nz = 8.2;
+          s.ny = 0;
+          s.newbornState = "Investigate";
           s.investigateX = s.px;
           s.investigateZ = s.pz;
-        }
-        if (s.newbornState === "Hunt") {
-          s.huntMemoryTimer = 6.0;
-        } else if (s.huntMemoryTimer > 0) {
-          s.huntMemoryTimer -= dt;
+          s.ambushFlickerWarning = false;
+          soundEngine.playHurt();
+          st.onAlertTriggered?.();
         }
 
-        let targetX = s.nx;
-        let targetZ = s.nz;
-        let speed = 0;
-
-        if (s.newbornState === "Hunt") {
-          targetX = s.px;
-          targetZ = s.pz;
-          speed = PHYSICS_PARAMS.newbornHuntSpeed;
-        } else if (s.newbornState === "Investigate") {
-          targetX = s.investigateX;
-          targetZ = s.investigateZ;
-          speed = PHYSICS_PARAMS.newbornInvestigateSpeed;
-          if (Math.hypot(targetX - s.nx, targetZ - s.nz) < 0.7) {
-            s.newbornState = "Patrol";
-          }
-        } else if (s.newbornState === "Patrol") {
-          const wp = ch.patrolPoints[s.patrolIdx % ch.patrolPoints.length];
-          targetX = wp.x;
-          targetZ = wp.z;
-          speed = PHYSICS_PARAMS.newbornPatrolSpeed;
-          if (Math.hypot(targetX - s.nx, targetZ - s.nz) < 0.85) {
-            s.patrolIdx = (s.patrolIdx + 1) % ch.patrolPoints.length;
-          }
+        if (dirRes.ambushFlickerWarning && !s.ambushWarningFired) {
+          s.ambushWarningFired = true;
+          soundEngine.playVentCreak();
+          st.onAmbushWarning?.();
         }
 
-        if (speed > 0) {
-          const navHop = findNextNavWaypoint(
+        if (s.directorWavePhase === "vent_retreat") {
+          s.ny = THREE.MathUtils.damp(s.ny, 2.75, 5, dt);
+          world.newborn.root.visible = s.ny < 2.45;
+        } else {
+          s.ny = THREE.MathUtils.damp(s.ny, 0, 8, dt);
+          world.newborn.root.visible = true;
+
+          const dist = Math.hypot(s.nx - s.px, s.nz - s.pz);
+          const lineClear = hasWallLineOfSight(
             s.nx,
             s.nz,
-            targetX,
-            targetZ,
-            ch.walls,
-            ch.navNodes
+            s.px,
+            s.pz,
+            effectiveWalls
           );
-          const dx = navHop.x - s.nx;
-          const dz = navHop.z - s.nz;
-          const d = Math.hypot(dx, dz) || 1;
-          const nextNx = s.nx + (dx / d) * speed * dt;
-          const nextNz = s.nz + (dz / d) * speed * dt;
-          const resolvedN = resolveCircleWallCollision(
-            nextNx,
-            nextNz,
-            0.4,
-            ch.walls
-          );
-          s.nx = resolvedN.x;
-          s.nz = resolvedN.z;
-          world.newborn.root.rotation.y = Math.atan2(dx, dz);
-        }
 
-        if (
-          !s.hidingInLocker &&
-          s.stunTimer <= 0 &&
-          s.hitCooldown <= 0 &&
-          Math.hypot(s.nx - s.px, s.nz - s.pz) < 1.15
-        ) {
-          s.hitCooldown = 3.2;
-          s.shakeTrauma = 1.0;
-          soundEngine.playHurt();
-          if (st.health === "vermelho") {
-            s.lungeTimer = 0.55;
-            soundEngine.playNewbornClick();
-            return;
+          const perc = evaluateNewbornPerception({
+            distanceM: dist,
+            hasLineOfSight: lineClear,
+            flashlightOn: s.flashlightOn,
+            roomLit: false,
+            playerNoiseM: noiseM,
+            playerHidingInLocker: s.hidingInLocker,
+            breathHeld: s.holdingBreath,
+            playerBleeding: st.health === "vermelho",
+            stunTimerSec: s.stunTimer,
+            currentState: s.newbornState,
+            sightRangeMult: diffCfg.sightRangeMult,
+          });
+
+          const prevState = s.newbornState;
+          s.newbornState = perc.nextState;
+
+          // Isca Sonora atrai Newborn caso não esteja em caçada direta
+          if (
+            s.activeDecoyTimer > 0 &&
+            s.newbornState !== "Hunt" &&
+            s.stunTimer <= 0
+          ) {
+            s.newbornState = "Investigate";
+            s.investigateX = s.activeDecoyX;
+            s.investigateZ = s.activeDecoyZ;
+          } else if (perc.detectedBy === "sound" || perc.detectedBy === "scent") {
+            s.investigateX = s.px;
+            s.investigateZ = s.pz;
           }
-          s.adrenalineTimer = 3.0;
-          s.hitstopTimer = 0.06;
-          st.onPlayerHurt();
+
+          if (s.newbornState !== prevState) {
+            if (s.newbornState === "Hunt") {
+              st.onGameplayCue?.("newborn_hunt");
+              st.onAlertTriggered?.();
+            } else if (s.newbornState === "Investigate" && prevState !== "Hunt") {
+              st.onGameplayCue?.("newborn_investigate");
+              st.onAlertTriggered?.();
+            }
+            const batteryPct = Math.round(
+              (s.batterySec / PHYSICS_PARAMS.maxBatterySec) * 100
+            );
+            const metrics = computePanicMetrics({
+              health: st.health,
+              newbornDist: dist,
+              newbornVisible: true,
+              newbornState: s.newbornState,
+              batteryPct,
+              flashlightOn: s.flashlightOn,
+              hidingInLocker: s.hidingInLocker,
+              holdingBreath: s.holdingBreath,
+            });
+            panicLogger.log(
+              {
+                event:
+                  s.newbornState === "Hunt" || s.newbornState === "Investigate"
+                    ? "detection_trigger"
+                    : "state_transition",
+                detail: `Newborn ${prevState} -> ${s.newbornState} (via ${perc.detectedBy})`,
+                panicPct: Math.round(metrics.panicLevel * 100),
+                heartRateBpm: metrics.estimatedBpm,
+                newbornDistM: dist,
+                newbornState: s.newbornState,
+                health: st.health,
+                resources: {
+                  batteryPct,
+                  flashlightOn: s.flashlightOn,
+                  tricorderOn: s.tricorderOn,
+                  hidingInLocker: s.hidingInLocker,
+                  kitsRemaining: st.kitsCount,
+                },
+              },
+              true
+            );
+          }
+
+          if (s.newbornState === "Hunt") {
+            s.huntMemoryTimer = 6.0;
+          } else if (s.huntMemoryTimer > 0) {
+            s.huntMemoryTimer -= dt;
+          }
+
+          let targetX = s.nx;
+          let targetZ = s.nz;
+          let speed = 0;
+
+          if (s.newbornState === "Hunt") {
+            targetX = s.px;
+            targetZ = s.pz;
+            speed = PHYSICS_PARAMS.newbornHuntSpeed * diffCfg.newbornSpeedMult;
+          } else if (s.newbornState === "Investigate") {
+            targetX = s.investigateX;
+            targetZ = s.investigateZ;
+            speed =
+              PHYSICS_PARAMS.newbornInvestigateSpeed * diffCfg.newbornSpeedMult;
+            if (Math.hypot(targetX - s.nx, targetZ - s.nz) < 0.7) {
+              s.newbornState = "Patrol";
+            }
+          } else if (s.newbornState === "Patrol") {
+            const wp = ch.patrolPoints[s.patrolIdx % ch.patrolPoints.length];
+            targetX = wp.x;
+            targetZ = wp.z;
+            speed = PHYSICS_PARAMS.newbornPatrolSpeed * diffCfg.newbornSpeedMult;
+            if (Math.hypot(targetX - s.nx, targetZ - s.nz) < 0.85) {
+              s.patrolIdx = (s.patrolIdx + 1) % ch.patrolPoints.length;
+            }
+          }
+
+          if (speed > 0) {
+            const navHop = findNextNavWaypoint(
+              s.nx,
+              s.nz,
+              targetX,
+              targetZ,
+              effectiveWalls,
+              ch.navNodes
+            );
+            const dx = navHop.x - s.nx;
+            const dz = navHop.z - s.nz;
+            const d = Math.hypot(dx, dz) || 1;
+            const nextNx = s.nx + (dx / d) * speed * dt;
+            const nextNz = s.nz + (dz / d) * speed * dt;
+            const resolvedN = resolveCircleWallCollision(
+              nextNx,
+              nextNz,
+              0.4,
+              effectiveWalls
+            );
+            s.nx = resolvedN.x;
+            s.nz = resolvedN.z;
+            world.newborn.root.rotation.y = Math.atan2(dx, dz);
+          }
+
+          if (
+            !s.hidingInLocker &&
+            s.stunTimer <= 0 &&
+            s.hitCooldown <= 0 &&
+            Math.hypot(s.nx - s.px, s.nz - s.pz) < 1.15
+          ) {
+            s.hitCooldown = 3.2;
+            s.shakeTrauma = 1.0;
+            soundEngine.playHurt();
+            if (st.health === "vermelho") {
+              s.lungeTimer = 0.55;
+              soundEngine.playNewbornClick();
+              return;
+            }
+            s.adrenalineTimer = 3.0;
+            s.hitstopTimer = 0.06;
+            st.onPlayerHurt();
+          }
         }
       }
 
@@ -1525,6 +1951,13 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           world.newborn.root.visible && distPlayer < 8
             ? Math.min(1, (8 - distPlayer) / 6)
             : 0;
+        const stealthExposurePct = computeStealthExposurePct({
+          flashlightOn: s.flashlightOn,
+          noiseM,
+          hidingInLocker: s.hidingInLocker,
+          holdingBreath: s.holdingBreath,
+          newbornState: s.newbornState,
+        });
         st.onTelemetry({
           batterySec: s.batterySec,
           breathSec: s.breathSec,
@@ -1549,9 +1982,17 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           panicPct: Math.round(panicMetrics.panicLevel * 100),
           heartRateBpm: panicMetrics.estimatedBpm,
           radialBlurStrength: panicMetrics.radialBlurStrength,
+          stealthExposurePct,
+          containmentActiveSec: s.containmentActiveSec,
+          containmentCooldownSec: s.containmentCooldownSec,
+          directorWarning: s.ambushFlickerWarning,
+          decoyActiveSec: s.activeDecoyTimer,
         });
       }
     }
+
+    let fpsSampleFrames = 0;
+    let fpsSampleElapsed = 0;
 
     function tick() {
       const now = performance.now();
@@ -1560,9 +2001,29 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       const dt = Math.min(rawDt, 0.05);
       const elapsed = now / 1000;
 
+      if (
+        !autoDowngraded &&
+        !isSoftwareGl &&
+        stateRef.current.graphicsPreset === "auto" &&
+        stateRef.current.phase === "playing" &&
+        !stateRef.current.pausedByModal
+      ) {
+        fpsSampleFrames += 1;
+        fpsSampleElapsed += rawDt;
+        if (fpsSampleElapsed >= 1.8) {
+          const avgFps = fpsSampleFrames / fpsSampleElapsed;
+          fpsSampleFrames = 0;
+          fpsSampleElapsed = 0;
+          if (avgFps < 26) {
+            autoDowngraded = true;
+            applyGraphicsConfig();
+          }
+        }
+      }
+
       if (!contextLost) {
         stepSimulation(dt, elapsed);
-        if (composer) {
+        if (composer && getEffGraphics().usePostProcessing) {
           composer.render();
         } else {
           renderer.render(scene, camera);
@@ -1582,6 +2043,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
       syncViewportRef.current = null;
+      applyGraphicsRef.current = null;
       resizeObserver.disconnect();
       window.removeEventListener("resize", syncViewportSize);
       window.removeEventListener("orientationchange", syncViewportSize);
@@ -1615,6 +2077,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       renderer.dispose();
     };
   }, [soundEngine, mobileInputRef, chapter.id]);
+
+  useEffect(() => {
+    applyGraphicsRef.current?.();
+  }, [graphicsPreset, brightness]);
 
   // Atualiza aspecto e FOV instantaneamente sempre que useOrientation detectar mudança de tela/rotação
   useEffect(() => {

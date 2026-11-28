@@ -18,16 +18,18 @@ description: >-
   - `node` (`v22+`), `npx`, `git`, `python3`, `tsx` para testes unitários (`node:test`), `vite build`, `tsc --noEmit`.
   - Browser headless Chromium via `playwright-cli` (`/ms-playwright`), sem GPU dedicada (renderização WebGL via SwiftShader em ambiente headless).
   - Para cargas pesadas de GPU (render/bake 3D no Blender ou geração neural de voz PT-BR), utilizar os scripts em nuvem preparados para **Google Colab (GPU T4)**.
-- **Diretrizes Obrigatórias**:
+- **Diretrizes Obrigatórias (Mobile / ARM Mali)**:
   - **Proibido `backdrop-filter` / `backdrop-blur`** sobre o `<canvas>` WebGL (previne perda de FPS e falhas de composição em GPU mobile/Adreno/Mali).
+  - **Proteção contra Bug "Luz Azul / Raio-X / Negativo" em ARM Mali (`Mali-G52`, `Mali-G57`)**: zero `MeshPhysicalMaterial`, `metalness <= 0.45` com `RoomEnvironment` ativo, zero cones aditivos atravessando paredes (`beamConeMesh` desativado), `SpotLight` da lanterna posicionada em `z = +0.08` atrás do plano frontal da câmera e intensidade limitada (`3.8`, `decay: 1.35`).
+  - **Presets Gráficos & 60 FPS**: `Automático`, `Desempenho`, `Equilibrado` e `Qualidade` (`resolveEffectiveGraphics`), sem `EffectComposer` em mobile/`auto`/`desempenho`/`equilibrado`, texturas escaladas (`256`/`512`) e downgrade automático se FPS médio cair abaixo de `26` em `auto`.
   - **Segurança**: Nunca hardcodar ou versionar tokens do GitHub (`github_pat_*`), chaves de API ou segredos em código, workflows ou testes. Workflows de CI usam exclusivamente `${{ secrets.GITHUB_TOKEN }}`.
-  - **Isolamento de Estado Puro**: Toda lógica de física, percepção da IA (`Newborn`), colisão, inventário, manifestos e fila de narração fica desacoplada do DOM/Three.js em `src/game/` e coberta por testes unitários.
+  - **Isolamento de Estado Puro**: Toda lógica de física, percepção da IA (`Newborn`), Diretor em Ondas (`advanceDirectorWave`), colisão, inventário, Relatório de Incidente (`computeIncidentReportRank`), manifestos e fila de narração fica desacoplada do DOM/Three.js em `src/game/` e coberta por testes unitários.
 
 ---
 
 ## 2. Arquitetura Modular (APK Casca Leve + Fases no GitHub Público)
 - **APK Casca Leve (`< 100 MB`)**:
-  - O bundle `dist/` embutido no APK contém apenas o motor 3D procedural/Three.js, UI (Tela Inicial, Seletor de Fases, Configurações/Dados, PADD, Modais), `manifest.json`, `data/narration_manifest.json` e áudios base (`public/audio/narration/base/`).
+  - O bundle `dist/` embutido no APK contém apenas o motor 3D procedural/Three.js, UI (Tela Inicial com fundo 3D vivo + Diagrama Vertical de 7 setores + 3 Dificuldades, Configurações/Dados, PADD 3 em 1, Relatório de Incidente), `manifest.json`, `data/narration_manifest.json` e áudios base (`public/audio/narration/base/`).
   - **Nunca embutir** modelos `.glb` pesados de capítulos ou pacotes de áudio de fases em `public/` ou `app/src/main/assets/`.
 - **Repositório & Release Pública**:
   - Repositório: `https://github.com/Dracko8891/Protocolo-Newborn`.
@@ -36,14 +38,14 @@ description: >-
 - **Persistência Offline & Gerenciador de Dados (`src/game/levelStorage.ts` & `DataManagerModal.tsx`)**:
   - Download com progresso em streaming, verificação de integridade via `crypto.subtle.digest("SHA-256")` e extração via `fflate.unzipSync`.
   - Salvamento persistente (fora do cache temporário) no `filesDir/levels` do Android via `AndroidLevelBridge` + `IndexedDB` (`vanguard7-persistent-levels`) com `navigator.storage.persist()`.
-  - Em **Configurações > Gerenciar Dados**, o jogador vê espaço ocupado, status (`Baixada (Offline)` / `Não baixada`), barra de progresso, botão **Baixar** e botão **Excluir dados**.
+  - Em **Configurações > Gerenciar Dados**, o jogador vê espaço ocupado, status (`Baixada (Offline)` / `Não baixada`), barra de progresso, botão **Baixar** e botão **Excluir dados**, além de **Gráficos & Imersão** (Preset, Brilho/Gama, Vibração Tátil).
 
 ---
 
-## 3. Sistema Completo de Narração Imersiva PT-BR & Camada Fisiológica
+## 3. Sistema Completo de Narração Imersiva PT-BR & Mecânicas Survival Horror
 - **Direção Artística & Roteiro (`public/data/narration_manifest.json` & `narration_manifest.json`)**:
   - Narração em **1ª pessoa** por **Arthur Vance** em situação real de sobrevivência: pausas tensas (`...`), hesitação, cortes de respiração (`—`) e urgência crescente.
-  - Cobre todas as 34 falas obrigatórias: `title_prologue`, `intro_flashback_base`, `chapter_01..07_intro`, `chapter_01..07_victory`, interações (`pickup_kit`, `pickup_badge`, `inspect_badge_pin`, `door_locked_no_power`, `relay_short_circuit`, `relay_solved`, `door_unlocked`) e perigo/sobrevivência (`newborn_vent_drop`, `ambient_distress`, `newborn_investigate`, `newborn_hunt`, `locker_enter`, `breath_low`, `battery_low`, `battery_empty`, `player_hurt_red`, `player_healed`, `gameover_defeat`).
+  - Cobre todas as **48 falas**: `title_prologue`, `intro_flashback_base`, `chapter_01..07_intro`, `chapter_01..07_victory`, os **14 Logs de Sobreviventes** (`chapter_01_log_1..chapter_07_log_2`), interações (`pickup_kit`, `pickup_badge`, `inspect_badge_pin`, `door_locked_no_power`, `relay_short_circuit`, `relay_solved`, `door_unlocked`) e perigo/sobrevivência (`newborn_vent_drop`, `ambient_distress`, `newborn_investigate`, `newborn_hunt`, `locker_enter`, `breath_low`, `battery_low`, `battery_empty`, `player_hurt_red`, `player_healed`, `gameover_defeat`).
 - **Controlador Central (`src/game/narrationManager.ts`)**:
   - Fila com preempção por prioridade: `panico` (5) e `ofegante` (4) interrompem imediatamente falas `calmo` (1) ou `tenso` (2); cooldown por `cueId` evita repetição excessiva.
   - Ordem de resolução sem erros 404 no console:
@@ -55,7 +57,10 @@ description: >-
   - Posicionamento adaptativo sem sobreposição: inline/canto inferior na Tela Inicial, abaixo da barra superior (`top-14 sm:top-16`) durante gameplay com HUD touch ativo (portrait e landscape), e barra inferior limpa em modo teclado.
   - Configurável em **Configurações > Áudio & Acessibilidade**: Volume da Narração, Ligar/Desligar Legendas, Tamanho (`pequeno` / `medio` / `grande`) e Voz Sintética Fallback.
 - **Respiração, Batimento Cardíaco & Audio Ducking (`src/game/soundEngine.ts`)**:
-  - `updatePhysiology()` sintetiza ciclos de inspiração/exalação e batimentos cardíacos proporcionais a perigo (`Investigate`/`Hunt`), corrida, fôlego baixo no armário (`<= 2.5s`) e estado ferido (`vermelho`), com *audio ducking* automático (`setNarrationDucking`) durante falas e desbloqueio de `AudioContext` atrelado a gesto do usuário.
+  - `updatePhysiology()` sintetiza ciclos de inspiração/exalação e batimentos cardíacos proporcionais a perigo (`Investigate`/`Hunt`), corrida, fôlego baixo no armário (`<= 2.5s`) e estado ferido (`vermelho`), com *audio ducking* automático (`setNarrationDucking`) durante falas e SFX dedicados (`playDecoyBeep`, `playGlassCrunch`, `playPuddleSplash`, `playVentCreak`).
+- **Loop & Ferramentas Táticas**:
+  - **PADD 3 em 1 (`PaddModal.tsx`)**: `Crachá & Inventário`, `Esquema do Setor` (névoa de guerra até escanear o Mapa de Parede) e `Arquivos & Logs` (replay dos 2 logs coletados).
+  - **Diretor em Ondas + Loops**: rotas circulares nos Capítulos 1 e 6, **Porta de Contenção Temporária** (`6s` + cooldown), **Isca Sonora** (`7s`), **Armadilhas Sonoras** (vidro/poça), **Rastro de Sangue** em `InstancedMesh` quando ferido, **Glitch cromático na HUD** (`proximityGlitch > 0.6`) e **Modo Espiar no Armário** com frestas.
 
 ---
 
@@ -64,17 +69,17 @@ description: >-
   - O jogo prioriza **Modo Paisagem (Landscape)** como experiência principal, mas nunca trava nem exige girar a tela: ao mudar para **Vertical (Retrato)**, alterna instantaneamente para layout em coluna vertical 100% jogável.
   - Android (`AndroidManifest.xml` e `MainActivity.kt`): `screenOrientation="fullSensor"` / `SCREEN_ORIENTATION_FULL_SENSOR`. Botão **Tela Cheia** no navegador garante `screen.orientation?.unlock?.()` para respeitar rotação física.
 - **Canvas 3D & Compensação de FOV (`VanguardCanvas.tsx` + `computeResponsiveFov`)**:
-  - Redimensionamento instantâneo via `ResizeObserver`, `window.resize`, `window.orientationchange` e `window.visualViewport` usando `100dvh`/`100vw` e `Math.min(window.devicePixelRatio, 2)`.
+  - Redimensionamento instantâneo via `ResizeObserver`, `window.resize`, `window.orientationchange` e `window.visualViewport` usando `100dvh`/`100vw` e `Math.min(window.devicePixelRatio, eff.maxDpr)`.
   - Em modo Vertical (`aspect < 1`), `computeResponsiveFov` expande dinamicamente o FOV vertical (até `98°`) preservando percepção lateral de corredores, portas, itens e Newborn sem visão de túnel.
 - **Safe Areas & Ergonomia Mobile/Tablet**:
   - `viewport-fit=cover` + `env(safe-area-inset-top/bottom/left/right)` em HUD, Tela Inicial, Controles Touch e Modais (`max-h-[92dvh] overflow-y-auto`).
-  - Controles Touch usam dimensionamento fluido (`clamp()`): em vertical estreito (`390px`), os botões da direita reorganizam em grade `2x2` sem colidir com o joystick à esquerda; em paisagem/tablet alinham em barra única confortável.
+  - Controles Touch com joystick progressivo (`stealthMove <= 60%`, `sprint > 85%`), botão **Giro Rápido 180°**, **Interagir** contextual destacado, **Isca Sonora** e feedback háptico (`navigator.vibrate`).
   - Wrapper da HUD touch sempre `pointer-events-none` (apenas joystick/botões com `pointer-events-auto`) para manter arraste de câmera na metade direita do `<canvas>`.
 
 ---
 
 ## 5. Pipelines de Áudio, 3D & CI/CD
-- **Áudio PT-BR na VM (CPU)**: `scripts/generate_narration_edge.py` (`edge-tts` + `ffmpeg`) gera os `.ogg` das 34 falas diretamente em CPU usando `pt-BR-AntonioNeural` com ajuste de ritmo/tom por emoção.
+- **Áudio PT-BR na VM (CPU)**: `scripts/generate_narration_edge.py` (`edge-tts` + `ffmpeg`) gera os `.ogg` das 48 falas diretamente em CPU usando `pt-BR-AntonioNeural` com ajuste de ritmo/tom por emoção.
 - **Chatterbox Multilingual PT-BR (Colab GPU)**: `scripts/generate_narration_colab.py` + notebook pronto **`scripts/Chatterbox_Colab.ipynb`** para clonar voz de referência (~5s) no Google Colab T4.
 - **Blender Headless / Colab**: `scripts/chapters/blender_chapter_builder.py` e `scripts/build_all_chapters_colab.py`.
 - **Empacotamento & Releases**: `npm run package:levels` (`scripts/package_chapters.mjs`) gera `fase_01.zip`..`fase_07.zip` (mesclando `assets-chapters/shared/`) e atualiza SHA-256 em `manifest.json`. Workflows `.github/workflows/release-levels.yml` e `.github/workflows/android-apk.yml` automatizam releases (`levels-v1.0.0`) e APK.

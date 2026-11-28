@@ -3,18 +3,24 @@ import assert from "node:assert/strict";
 import {
   CHAPTER_CONFIGS,
   ChapterId,
+  DIFFICULTY_PARAMS,
   MEDICAL_WING_WALLS,
+  OMEGA_WALLS,
   PHYSICS_PARAMS,
   addItemToInventory,
+  advanceDirectorWave,
   computeDollyZoomFov,
   computeExponentialHeartbeatPulse,
   computeHeartbeatIntervalMs,
+  computeIncidentReportRank,
   computePanicMetrics,
   computeResponsiveFov,
+  computeStealthExposurePct,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
   resolveCircleWallCollision,
+  resolveEffectiveGraphics,
   resolveTouchControlsActive,
   shouldEnableTouchControlsByDefault,
   validateKeypadCode,
@@ -177,9 +183,12 @@ test("Todos os 7 capítulos possuem spawn, pickups, armários e saídas livres d
       ch.spawn,
       ch.kitPos,
       ch.badgePos,
+      ch.decoyPos,
+      { x: ch.containmentDoor.panelX, z: ch.containmentDoor.panelZ },
       { x: ch.lockerPos.hideX, z: ch.lockerPos.hideZ },
       { x: ch.relayPos.x, z: ch.relayPos.z - 0.5 },
       { x: ch.exitPos.x, z: ch.exitPos.z - 0.5 },
+      ...ch.survivorLogs.map((l) => ({ x: l.x, z: l.z })),
       ...ch.navNodes,
     ];
     for (const pt of checkPoints) {
@@ -197,9 +206,17 @@ test("Todos os 7 capítulos possuem spawn, pickups, armários e saídas livres d
     assert.equal(validateKeypadCode(ch.expectedPin, ch.expectedPin), true);
     assert.equal(validateKeypadCode("0000", ch.expectedPin), false);
     assert.ok(ch.navNodes.length >= 8);
+    assert.equal(ch.survivorLogs.length, 2);
+    assert.ok(ch.soundTraps.length >= 2);
     assert.ok(!pins.has(ch.expectedPin));
     pins.add(ch.expectedPin);
   }
+
+  // Rotas circulares (loops) no Cap. 1 e Cap. 6 sem beco sem saída
+  assert.equal(hasWallLineOfSight(-6.8, 7.5, -6.8, 10.5, MEDICAL_WING_WALLS), true);
+  assert.equal(hasWallLineOfSight(6.8, 7.5, 6.8, 10.5, MEDICAL_WING_WALLS), true);
+  assert.equal(hasWallLineOfSight(8.2, -0.5, 8.2, 3.0, OMEGA_WALLS), true);
+  assert.equal(hasWallLineOfSight(-8.2, 3.0, -8.2, 6.6, OMEGA_WALLS), true);
 });
 
 test("Batimento cardíaco começa lento, acelera bruscamente no pico, Dolly Zoom comprime e desfoque radial aumenta", () => {
@@ -414,10 +431,25 @@ test("narration_manifest.json e public/data/narration_manifest.json contêm toda
     "player_hurt_red",
     "player_healed",
     "gameover_defeat",
+    "chapter_01_log_1",
+    "chapter_01_log_2",
+    "chapter_02_log_1",
+    "chapter_02_log_2",
+    "chapter_03_log_1",
+    "chapter_03_log_2",
+    "chapter_04_log_1",
+    "chapter_04_log_2",
+    "chapter_05_log_1",
+    "chapter_05_log_2",
+    "chapter_06_log_1",
+    "chapter_06_log_2",
+    "chapter_07_log_1",
+    "chapter_07_log_2",
   ];
   for (const id of requiredIds) {
     assert.ok(ids.has(id), `Falta fala obrigatória no manifesto: ${id}`);
   }
+  assert.equal(manifest.cues.length, 48);
   assert.equal(
     manifest.cues.filter((c) => c.scope === "base").length,
     2,
@@ -485,4 +517,77 @@ test("computeResponsiveFov compensa modo vertical (aspect < 1) e readViewportOri
   assert.ok(fallbackOri.width > 0 && fallbackOri.height > 0);
   assert.equal(fallbackOri.isLandscape, !fallbackOri.isPortrait);
 });
+
+test("Presets gráficos ARM Mali, Relatório de Incidente S/A/B/C, Stealth Exposure e Diretor em Ondas", () => {
+  const autoMob = resolveEffectiveGraphics("auto", true, false, false);
+  assert.equal(autoMob.usePostProcessing, false);
+  assert.equal(autoMob.shadowsEnabled, false);
+  assert.equal(autoMob.textureSize, 256);
+  assert.equal(autoMob.maxDpr, 1.0);
+
+  const autoDown = resolveEffectiveGraphics("auto", true, false, true);
+  assert.equal(autoDown.maxDpr, 0.85);
+
+  const qualDesk = resolveEffectiveGraphics("qualidade", false, false, false);
+  assert.equal(qualDesk.usePostProcessing, true);
+  assert.equal(qualDesk.shadowsEnabled, true);
+
+  assert.equal(
+    computeIncidentReportRank({
+      elapsedSec: 95,
+      alertsCount: 0,
+      damageHits: 0,
+      logsFound: 2,
+      difficulty: "sobrevivencia",
+    }),
+    "S"
+  );
+  assert.equal(
+    computeIncidentReportRank({
+      elapsedSec: 200,
+      alertsCount: 4,
+      damageHits: 1,
+      logsFound: 1,
+      difficulty: "sobrevivencia",
+    }),
+    "C"
+  );
+
+  assert.ok(
+    computeStealthExposurePct({
+      flashlightOn: false,
+      noiseM: 0,
+      hidingInLocker: true,
+      holdingBreath: true,
+      newbornState: "Patrol",
+    }) <
+      computeStealthExposurePct({
+        flashlightOn: true,
+        noiseM: PHYSICS_PARAMS.noiseSprintM,
+        hidingInLocker: false,
+        holdingBreath: false,
+        newbornState: "Hunt",
+      })
+  );
+
+  const pressureDone = advanceDirectorWave({
+    wavePhase: "pressure",
+    timerSec: DIFFICULTY_PARAMS.sobrevivencia.pressureSec,
+    dt: 0.2,
+    newbornState: "Patrol",
+    difficulty: "sobrevivencia",
+  });
+  assert.equal(pressureDone.wavePhase, "vent_retreat");
+  assert.equal(pressureDone.event, "retreat_to_vent");
+
+  const warningTick = advanceDirectorWave({
+    wavePhase: "vent_retreat",
+    timerSec: DIFFICULTY_PARAMS.sobrevivencia.ventRetreatSec - 1.0,
+    dt: 0.1,
+    newbornState: "Patrol",
+    difficulty: "sobrevivencia",
+  });
+  assert.equal(warningTick.ambushFlickerWarning, true);
+});
+
 
