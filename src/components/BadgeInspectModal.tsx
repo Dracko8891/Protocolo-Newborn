@@ -51,9 +51,9 @@ export const BadgeInspectModal: React.FC<BadgeInspectModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label="Inspeção 3D do Crachá do Supervisor"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#07090d]/85 p-4"
+      className="safe-area-modal fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-[#07090d]/85 p-3 sm:p-4"
     >
-      <div className="w-full max-w-lg border border-amber-500/40 bg-[#0d121b] p-6 shadow-2xl">
+      <div className="my-auto max-h-[92dvh] w-full max-w-lg overflow-y-auto border border-amber-500/40 bg-[#0d121b] p-4 sm:p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700/70 pb-3">
           <div>
             <p className="text-xs font-mono-tabular text-amber-400">
@@ -87,11 +87,11 @@ export const BadgeInspectModal: React.FC<BadgeInspectModalProps> = ({
           onPointerMove={handlePointerMove}
           onPointerUp={() => setDragging(false)}
           onPointerLeave={() => setDragging(false)}
-          className="mt-4 flex h-64 cursor-grab items-center justify-center border border-slate-800 bg-[#06080d] active:cursor-grabbing"
+          className="mt-3 flex h-52 sm:h-64 cursor-grab items-center justify-center border border-slate-800 bg-[#06080d] active:cursor-grabbing"
           style={{ perspective: "900px" }}
         >
           <div
-            className="relative h-44 w-72 transition-transform duration-75"
+            className="relative h-40 w-[min(18rem,76vw)] sm:h-44 sm:w-72 transition-transform duration-75"
             style={{
               transformStyle: "preserve-3d",
               transform: `rotateX(${rotX}deg) rotateY(${rotY}deg)`,

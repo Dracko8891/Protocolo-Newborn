@@ -116,9 +116,11 @@ export const NarrationSubtitle: React.FC<NarrationSubtitleProps> = ({
   const placementClass = inlineTitle
     ? "pointer-events-none mt-3 w-full max-w-xl lg:fixed lg:bottom-10 lg:right-10 lg:mt-0 lg:z-35 lg:max-w-md"
     : inGameplay && touchControlsActive
-      ? "pointer-events-none fixed inset-x-0 top-14 sm:top-16 z-35 flex justify-center px-3 sm:px-6"
+      ? "pointer-events-none fixed inset-x-0 top-[calc(4.75rem+env(safe-area-inset-top))] sm:top-[calc(3.95rem+env(safe-area-inset-top))] z-35 flex justify-center px-3 sm:px-6"
       : `pointer-events-none fixed inset-x-0 z-35 flex justify-center px-3 sm:px-6 ${
-          inGameplay ? "bottom-11 sm:bottom-12" : "bottom-10 sm:bottom-14"
+          inGameplay
+            ? "bottom-[calc(2.75rem+env(safe-area-inset-bottom))] sm:bottom-[calc(3rem+env(safe-area-inset-bottom))]"
+            : "bottom-[calc(2.5rem+env(safe-area-inset-bottom))] sm:bottom-[calc(3.5rem+env(safe-area-inset-bottom))]"
         }`;
 
   return (

@@ -20,7 +20,7 @@ on:
       - ".github/workflows/android-apk.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -68,28 +68,42 @@ jobs:
         with:
           gradle-version: "9.3.1"
 
-      - name: Create debug signing key
+      - name: Create signing keystore
         run: |
           keytool -genkeypair -v \
             -keystore debug.keystore -storepass android \
             -alias androiddebugkey -keypass android \
             -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Android Debug,O=Android,C=US"
+            -dname "CN=Protocolo Newborn,O=Dracko8891,C=BR"
 
-      - name: Build debug APK
+      - name: Build signed installable APK
         run: gradle --no-daemon :app:assembleDebug
 
-      - name: Verify APK
+      - name: Verify and stage Protocolo-Newborn.apk
         run: |
           APK="app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          file "$APK"
-          sha256sum "$APK"
+          mkdir -p dist-apk
+          cp "$APK" dist-apk/Protocolo-Newborn.apk
+          file dist-apk/Protocolo-Newborn.apk
+          sha256sum dist-apk/Protocolo-Newborn.apk
 
-      - name: Upload APK
+      - name: Upload APK workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: PROTOCOLO-NEWBORN-Android-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: dist-apk/Protocolo-Newborn.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish Protocolo-Newborn.apk to Release apk-latest
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: "Protocolo Newborn · APK Base"
+          body: "APK Base leve do Protocolo Newborn (Android). Baixe, instale e faça o download dos capítulos diretamente no jogo."
+          make_latest: true
+          files: |
+            dist-apk/Protocolo-Newborn.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

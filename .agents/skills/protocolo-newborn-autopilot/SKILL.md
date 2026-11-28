@@ -59,31 +59,37 @@ description: >-
 
 ---
 
-## 4. Padrão de Controles Touch Mobile & Tablet
-- **Detecção Unificada (`src/game/gameLogic.ts`)**:
-  - `resolveTouchControlsActive(controlMode, signals)` respeita `auto`, `touch`, `keyboard`, host `appassets.androidplatform.net`, User-Agent Android/iOS, iPadOS (`Macintosh` com `maxTouchPoints > 1`) e parâmetro `?touch=1`.
-- **Arquitetura de Camadas Touch (`src/App.tsx` + `src/components/VanguardCanvas.tsx`)**:
-  - Wrapper da HUD touch sempre com `pointer-events-none`; apenas o **Joystick Virtual** (esquerda + botão `Correr`) e os **Botões Táticos** (direita: `Agachar`, `Lanterna`, `Tricorder`, `Dínamo`, giro `↺`/`↻`, `Interagir` e slider `touchSensitivity` de `0.5x` a `1.8x`) usam `pointer-events-auto`.
-  - Metade direita livre do `<canvas>` (`clientX >= window.innerWidth * 0.45`) captura `touchstart`/`touchmove` diretamente para câmera 360° suave e sem bloqueios.
+## 4. Padrão de Controles Touch & Responsividade (Paisagem + Vertical)
+- **Prioridade Paisagem + Rotação Automática Livre**:
+  - O jogo prioriza **Modo Paisagem (Landscape)** como experiência principal, mas nunca trava nem exige girar a tela: ao mudar para **Vertical (Retrato)**, alterna instantaneamente para layout em coluna vertical 100% jogável.
+  - Android (`AndroidManifest.xml` e `MainActivity.kt`): `screenOrientation="fullSensor"` / `SCREEN_ORIENTATION_FULL_SENSOR`. Botão **Tela Cheia** no navegador garante `screen.orientation?.unlock?.()` para respeitar rotação física.
+- **Canvas 3D & Compensação de FOV (`VanguardCanvas.tsx` + `computeResponsiveFov`)**:
+  - Redimensionamento instantâneo via `ResizeObserver`, `window.resize`, `window.orientationchange` e `window.visualViewport` usando `100dvh`/`100vw` e `Math.min(window.devicePixelRatio, 2)`.
+  - Em modo Vertical (`aspect < 1`), `computeResponsiveFov` expande dinamicamente o FOV vertical (até `98°`) preservando percepção lateral de corredores, portas, itens e Newborn sem visão de túnel.
+- **Safe Areas & Ergonomia Mobile/Tablet**:
+  - `viewport-fit=cover` + `env(safe-area-inset-top/bottom/left/right)` em HUD, Tela Inicial, Controles Touch e Modais (`max-h-[92dvh] overflow-y-auto`).
+  - Controles Touch usam dimensionamento fluido (`clamp()`): em vertical estreito (`390px`), os botões da direita reorganizam em grade `2x2` sem colidir com o joystick à esquerda; em paisagem/tablet alinham em barra única confortável.
+  - Wrapper da HUD touch sempre `pointer-events-none` (apenas joystick/botões com `pointer-events-auto`) para manter arraste de câmera na metade direita do `<canvas>`.
 
 ---
 
-## 5. Pipelines em Nuvem & CI/CD
-- **Blender Headless / Colab**: `scripts/chapters/blender_chapter_builder.py` e `scripts/build_all_chapters_colab.py` (gera GLBs otimizados por capítulo em `assets-chapters/fase_0X/`).
-- **Chatterbox Multilingual PT-BR (Colab)**: `scripts/generate_narration_colab.py` lê o manifesto, clona referência PT-BR ofegante (~5s), ajusta `exaggeration` por emoção, exporta `.ogg`/`.mp3` para `public/audio/narration/base/` ou `assets-chapters/...` e atualiza `availableBaseAudio` em todos os manifestos.
-- **Empacotamento & Releases**: `npm run package:levels` (`scripts/package_chapters.mjs`) gera `fase_01.zip`..`fase_07.zip` (mesclando `assets-chapters/shared/`) e atualiza os hashes SHA-256 em `manifest.json`. Workflows `.github/workflows/release-levels.yml` e `.github/workflows/android-apk.yml` automatizam releases (`levels-v1.0.0`) e builds de APK no GitHub.
+## 5. Pipelines de Áudio, 3D & CI/CD
+- **Áudio PT-BR na VM (CPU)**: `scripts/generate_narration_edge.py` (`edge-tts` + `ffmpeg`) gera os `.ogg` das 34 falas diretamente em CPU usando `pt-BR-AntonioNeural` com ajuste de ritmo/tom por emoção.
+- **Chatterbox Multilingual PT-BR (Colab GPU)**: `scripts/generate_narration_colab.py` + notebook pronto **`scripts/Chatterbox_Colab.ipynb`** para clonar voz de referência (~5s) no Google Colab T4.
+- **Blender Headless / Colab**: `scripts/chapters/blender_chapter_builder.py` e `scripts/build_all_chapters_colab.py`.
+- **Empacotamento & Releases**: `npm run package:levels` (`scripts/package_chapters.mjs`) gera `fase_01.zip`..`fase_07.zip` (mesclando `assets-chapters/shared/`) e atualiza SHA-256 em `manifest.json`. Workflows `.github/workflows/release-levels.yml` e `.github/workflows/android-apk.yml` automatizam releases (`levels-v1.0.0`) e APK.
 
 ---
 
-## 6. Rotina Obrigatória de Testes & Verificação Playwright
-Sempre executar esta sequência após alterações de código antes de finalizar:
+## 6. Rotina Obrigatória de Testes & Verificação Playwright (4 Orientações)
+Sempre executar após alterações de código antes de finalizar:
 1. **Testes Unitários**: `npx --yes tsx --test src/game/gameLogic.test.ts` (100% aprovação obrigatória).
-2. **Dry-run Colab (quando alterar roteiro/script)**: `python3 scripts/generate_narration_colab.py --dry-run`.
+2. **Dry-run Colab**: `python3 scripts/generate_narration_colab.py --dry-run`.
 3. **Build & Typecheck**: `compile_applet` (`vite build`) + `lint_applet` (`tsc --noEmit`).
 4. **Reiniciar Servidor**: `restart_dev_server` (`DISABLE_HMR=true`).
-5. **Verificação E2E com `playwright-cli` (Chromium Headless)**:
-   - Usar binário global `playwright-cli` com `trap 'playwright-cli close' EXIT` (nunca `npx playwright-cli` nem scripts Node importando `playwright`).
-   - **Mobile Retrato (`390x844`)**: verificar Tela Inicial, legenda `title_prologue` sem sobrepor botões, abrir Configurações (`Áudio & Acessibilidade` + `Gerenciar Dados`), simular download de `fase_01.zip` via `page.route`, validar persistência (`Baixada (Offline)`) e remoção (`Excluir dados`).
-   - **Tablet (`1024x768`)**: validar transição Flashback (`intro_flashback_base`) -> Gameplay (`chapter_01_intro`) + HUD touch sem sobreposição.
-   - **Mobile Paisagem (`844x390`, `?autostart=1&touch=1`)**: verificar posição da legenda no topo livre, joystick/botões touch (`Lanterna`), abertura/fechamento do PADD e Pausa/Retomada.
-   - **Inspeção Obrigatória**: revisar screenshots capturados em `.playwright-cli/`, confirmar **0 erros e 0 avisos** em `playwright-cli console`, e encerrar removendo `.playwright-cli` (`rm -rf .playwright-cli`).
+5. **Verificação E2E com `playwright-cli` (Chromium Headless) nas 4 orientações**:
+   - **Celular Paisagem (`844x390`)**: HUD touch, joystick/botões, legenda no topo livre, modais (`PADD`, `Pausa`) sem corte.
+   - **Celular Vertical (`390x844`)**: Tela Inicial + `title_prologue` sem sobreposição, Configurações/Gerenciador de Dados, HUD touch em grade 2x2 sem colidir com joystick, legenda sem sobrepor HUD.
+   - **Tablet Paisagem (`1024x768`)**: Fluxo Flashback -> Gameplay + áudio/legenda + PADD.
+   - **Tablet Vertical (`768x1024`)**: Gameplay + PADD + modais responsivos sem overflow horizontal.
+   - Confirmar **0 erros e 0 avisos** em `playwright-cli console`, revisar screenshots e limpar `.playwright-cli` (`rm -rf .playwright-cli`).

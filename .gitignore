@@ -16,3 +16,11 @@
 local.properties
 .env
 debug.keystore
+node_modules/
+dist/
+dist-levels/
+dist-apk/
+.playwright-cli/
+app/build/
+.tmp_*
+*.log

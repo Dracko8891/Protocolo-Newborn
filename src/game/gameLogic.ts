@@ -183,6 +183,23 @@ export function computeDollyZoomFov(
   return PHYSICS_PARAMS.defaultFov - (health === "vermelho" ? 2 : 0);
 }
 
+/**
+ * Compensa o campo de visão vertical quando a tela está em modo Vertical (aspect < 1),
+ * mantendo corredores laterais, portas, itens e o Newborn visíveis sem efeito "visão de túnel".
+ */
+export function computeResponsiveFov(baseFov: number, aspect: number): number {
+  if (!Number.isFinite(aspect) || aspect >= 1) {
+    return baseFov;
+  }
+  const safeAspect = Math.max(0.42, aspect);
+  // Alvo horizontal equivalente ao modo 4:3/16:10 mantendo percepção periférica em retrato
+  const baseHalfRad = ((baseFov * Math.PI) / 180) * 0.5;
+  const targetHorizTan = Math.tan(baseHalfRad) * 1.18;
+  const compensatedVerticalDeg =
+    (2 * Math.atan(targetHorizTan / safeAspect) * 180) / Math.PI;
+  return Math.max(baseFov, Math.min(98, compensatedVerticalDeg));
+}
+
 export interface PanicMetricsInput {
   health: HealthState;
   newbornDist: number;

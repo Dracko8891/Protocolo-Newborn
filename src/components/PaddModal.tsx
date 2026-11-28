@@ -51,11 +51,11 @@ export const PaddModal: React.FC<PaddModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label="PADD de Pulso LCARS"
-      className="fixed inset-0 z-30 flex items-center justify-center bg-[#07090d]/85 p-4"
+      className="safe-area-modal fixed inset-0 z-30 flex items-center justify-center overflow-y-auto bg-[#07090d]/85 p-3 sm:p-4"
     >
-      <div className="flex max-h-[90vh] w-full max-w-3xl flex-col border border-amber-500/50 bg-[#0b1018] shadow-2xl">
+      <div className="my-auto flex max-h-[92dvh] w-full max-w-3xl flex-col border border-amber-500/50 bg-[#0b1018] shadow-2xl">
         {/* Barra superior LCARS */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/30 bg-[#111824] px-5 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-500/30 bg-[#111824] px-3.5 py-2.5 sm:px-5 sm:py-3">
           <div className="flex items-center gap-3">
             <span className="h-4 w-2 bg-amber-500" />
             <div>
@@ -89,47 +89,47 @@ export const PaddModal: React.FC<PaddModalProps> = ({
         </div>
 
         {/* Abas */}
-        <div className="flex border-b border-slate-800 bg-[#0e1420] px-5 pt-2">
+        <div className="flex overflow-x-auto border-b border-slate-800 bg-[#0e1420] px-3 pt-1.5 sm:px-5 sm:pt-2">
           <button
             type="button"
             onClick={() => onTabChange("inventario")}
-            className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs sm:px-4 sm:text-sm font-medium ${
               activeTab === "inventario"
                 ? "border-amber-400 text-amber-300"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <Package className="h-4 w-4" />
+            <Package className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             Inventário ({inventory.length}/6)
           </button>
           <button
             type="button"
             onClick={() => onTabChange("mapa")}
-            className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs sm:px-4 sm:text-sm font-medium ${
               activeTab === "mapa"
                 ? "border-cyan-400 text-cyan-300"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <MapIcon className="h-4 w-4" />
+            <MapIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             Mapa Holográfico
           </button>
           <button
             type="button"
             onClick={() => onTabChange("logs")}
-            className={`flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium ${
+            className={`flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs sm:px-4 sm:text-sm font-medium ${
               activeTab === "logs"
                 ? "border-emerald-400 text-emerald-300"
                 : "border-transparent text-slate-400 hover:text-slate-200"
             }`}
           >
-            <FileText className="h-4 w-4" />
+            <FileText className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             Arquivos & Logs
           </button>
         </div>
 
         {/* Conteúdo */}
-        <div className="overflow-y-auto p-5">
+        <div className="overflow-y-auto p-3.5 sm:p-5">
           {activeTab === "inventario" && (
             <div className="space-y-4">
               {/* Barra ECG de Saúde */}

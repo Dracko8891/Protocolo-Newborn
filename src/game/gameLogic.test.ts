@@ -10,6 +10,7 @@ import {
   computeExponentialHeartbeatPulse,
   computeHeartbeatIntervalMs,
   computePanicMetrics,
+  computeResponsiveFov,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
@@ -24,6 +25,7 @@ import { NarrationManager } from "./narrationManager";
 import { parseNarrationManifest, shouldPreemptCue } from "./narrationManifest";
 import { panicLogger } from "./panicLogger";
 import { SoundEngine } from "./soundEngine";
+import { readViewportOrientationState } from "../hooks/useOrientation";
 
 test("Jogador spawna em caminho aberto na Sala de Segurança sem colidir com o balcão", () => {
   const spawn = resolveCircleWallCollision(
@@ -241,6 +243,12 @@ test("Batimento cardíaco começa lento, acelera bruscamente no pico, Dolly Zoom
   assert.ok(huntedInjured.estimatedBpm > calm.estimatedBpm);
   assert.ok(huntedInjured.radialBlurStrength > calm.radialBlurStrength);
   assert.ok(huntedInjured.lensDistortion > calm.lensDistortion);
+
+  assert.equal(computeResponsiveFov(64, 844 / 390), 64);
+  const portraitFov = computeResponsiveFov(64, 390 / 844);
+  assert.ok(portraitFov > 80 && portraitFov <= 98, `portraitFov=${portraitFov}`);
+  const tabletPortraitFov = computeResponsiveFov(64, 768 / 1024);
+  assert.ok(tabletPortraitFov > 64 && tabletPortraitFov < portraitFov);
 
   const entry = panicLogger.log(
     {
@@ -463,3 +471,18 @@ test("NarrationManager interrompe fala calma com pânico e usa fallback seguro s
   mgr.clear();
   assert.equal(mgr.getActiveSubtitle(), null);
 });
+
+test("computeResponsiveFov compensa modo vertical (aspect < 1) e readViewportOrientationState retorna estado válido", () => {
+  const landscapeFov = computeResponsiveFov(64, 16 / 9);
+  const portraitPhoneFov = computeResponsiveFov(64, 390 / 844);
+  const portraitTabletFov = computeResponsiveFov(64, 768 / 1024);
+
+  assert.equal(landscapeFov, 64);
+  assert.ok(portraitTabletFov > 64 && portraitTabletFov <= 98);
+  assert.ok(portraitPhoneFov > portraitTabletFov && portraitPhoneFov <= 98);
+
+  const fallbackOri = readViewportOrientationState();
+  assert.ok(fallbackOri.width > 0 && fallbackOri.height > 0);
+  assert.equal(fallbackOri.isLandscape, !fallbackOri.isPortrait);
+});
+

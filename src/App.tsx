@@ -8,6 +8,8 @@ import {
   Hand,
   HardDrive,
   HeartPulse,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   Radio,
@@ -198,6 +200,32 @@ export default function App() {
     return Number.isFinite(saved) && saved >= 0.5 && saved <= 1.8 ? saved : 1.0;
   });
   const [activeTouchBtn, setActiveTouchBtn] = useState<string | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const onFsChange = () => {
+      setIsFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", onFsChange);
+    return () => document.removeEventListener("fullscreenchange", onFsChange);
+  }, []);
+
+  const toggleAppFullscreen = useCallback(async () => {
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen?.();
+      } else {
+        await document.documentElement.requestFullscreen?.();
+        // Respeita a rotação automática por sensor (não trava vertical caso o usuário gire ou use em pé)
+        const orientation = (
+          screen as Screen & { orientation?: { unlock?: () => void } }
+        ).orientation;
+        orientation?.unlock?.();
+      }
+    } catch {
+      // Ignora em navegadores/iOS sem API Fullscreen
+    }
+  }, []);
   const [cacheSnapshot, setCacheSnapshot] = useState<ResourceCacheSnapshot>({
     status: "idle",
     progressPct: 0,
@@ -974,9 +1002,25 @@ export default function App() {
 
       {/* TELA TÍTULO */}
       {phase === "title" && (
-        <div className="fixed inset-0 z-20 flex flex-col justify-between overflow-y-auto p-3.5 sm:p-10">
-          {/* Topo mínimo à direita com som */}
-          <div className="flex justify-end">
+        <div className="safe-area-hud fixed inset-0 z-20 flex flex-col justify-between overflow-y-auto p-3.5 sm:p-10">
+          {/* Topo mínimo à direita com som e tela cheia */}
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.currentTarget.blur();
+                void toggleAppFullscreen();
+              }}
+              aria-label={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+              title={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+              className="flex h-10 w-10 items-center justify-center border border-slate-700/80 bg-[#0b1018]/85 text-slate-300 hover:border-cyan-400 hover:text-white"
+            >
+              {isFullscreen ? (
+                <Minimize2 className="h-4 w-4" />
+              ) : (
+                <Maximize2 className="h-4 w-4" />
+              )}
+            </button>
             <button
               type="button"
               onClick={(e) => {
@@ -1292,11 +1336,11 @@ export default function App() {
 
       {/* HUD MINIMALISTA E SEMI-TRANSPARENTE (>= 90% cena escura livre) */}
       {phase === "playing" && !pausedByModal && (
-        <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3.5 sm:p-5">
+        <div className="safe-area-hud pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-5">
           {/* Topo: Telemetria nua no canto esquerdo + ícones translúcidos no canto direito */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="space-y-1 opacity-85 drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">
-              <div className="flex flex-wrap items-center gap-3.5 font-mono-tabular text-[11px]">
+          <div className="flex items-start justify-between gap-2 sm:gap-4">
+            <div className="min-w-0 space-y-1 opacity-85 drop-shadow-[0_1px_4px_rgba(0,0,0,0.95)]">
+              <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 sm:gap-3.5 font-mono-tabular text-[10px] sm:text-[11px]">
                 <span
                   className={`flex items-center gap-1 font-bold ${
                     health === "verde" ? "text-emerald-400" : "text-rose-400"
@@ -1312,7 +1356,7 @@ export default function App() {
                   }`}
                 >
                   <Flashlight className="h-3.5 w-3.5" />
-                  <span className="inline-block h-1 w-10 bg-white/15 overflow-hidden">
+                  <span className="inline-block h-1 w-8 sm:w-10 bg-white/15 overflow-hidden">
                     <span
                       className="block h-full bg-amber-400 transition-[width]"
                       style={{ width: `${batteryPct}%` }}
@@ -1335,12 +1379,12 @@ export default function App() {
                 )}
               </div>
 
-              <div className="text-[11px] font-medium text-amber-200/80">
+              <div className="line-clamp-1 text-[10px] sm:text-[11px] font-medium text-amber-200/80">
                 {currentObjective}
               </div>
             </div>
 
-            <div className="pointer-events-auto flex items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity">
+            <div className="pointer-events-auto flex shrink-0 items-center gap-1 sm:gap-1.5 opacity-85 hover:opacity-100 transition-opacity">
               <button
                 type="button"
                 tabIndex={-1}
@@ -1363,7 +1407,7 @@ export default function App() {
                     : "Controles touch ocultos (toque para ativar)"
                 }
                 title={`Modo de controle: ${controlMode}`}
-                className={`flex h-8 items-center gap-1 border px-2 font-mono-tabular text-[10px] font-semibold transition-colors ${
+                className={`flex h-8 items-center gap-1 border px-1.5 sm:px-2 font-mono-tabular text-[10px] font-semibold transition-colors ${
                   touchControlsEnabled
                     ? "border-cyan-400/60 bg-cyan-950/65 text-cyan-200"
                     : "border-white/10 bg-black/30 text-slate-400 hover:text-slate-200"
@@ -1376,6 +1420,23 @@ export default function App() {
                   }`}
                 />
                 <span className="hidden sm:inline">TOUCH</span>
+              </button>
+
+              <button
+                type="button"
+                tabIndex={-1}
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  void toggleAppFullscreen();
+                }}
+                aria-label={isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
+                className="flex h-8 w-8 items-center justify-center bg-black/30 text-slate-300 hover:bg-black/60 hover:text-white"
+              >
+                {isFullscreen ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
               </button>
 
               <button
@@ -1403,7 +1464,7 @@ export default function App() {
                   handleAction({ type: "toggle_padd" });
                 }}
                 aria-label="Abrir PADD"
-                className="flex h-8 items-center gap-1 bg-black/30 px-2.5 text-[11px] font-semibold text-amber-300/90 hover:bg-black/60"
+                className="flex h-8 items-center gap-1 bg-black/30 px-2 sm:px-2.5 text-[11px] font-semibold text-amber-300/90 hover:bg-black/60"
               >
                 <Tablet className="h-3.5 w-3.5" />
                 PADD
@@ -1461,14 +1522,14 @@ export default function App() {
           data-testid="touch-controls-layer"
           style={{
             zIndex: 25,
-            paddingBottom: "max(1.25rem, env(safe-area-inset-bottom))",
+            paddingBottom: "max(1rem, env(safe-area-inset-bottom))",
             paddingLeft: "max(0.75rem, env(safe-area-inset-left))",
             paddingRight: "max(0.75rem, env(safe-area-inset-right))",
           }}
-          className="pointer-events-none fixed inset-x-0 bottom-4 z-25 flex touch-none items-end justify-between sm:bottom-6"
+          className="pointer-events-none fixed inset-x-0 bottom-2 z-25 flex touch-none items-end justify-between gap-2 sm:bottom-5"
         >
-          {/* Esquerda: Correr + Joystick Analógico Virtual responsivo (celular/tablet) */}
-          <div className="pointer-events-auto flex flex-col items-start gap-2 opacity-85">
+          {/* Esquerda: Correr + Joystick Analógico Virtual fluido (celular/tablet, vertical/paisagem) */}
+          <div className="pointer-events-auto flex shrink-0 flex-col items-start gap-2 opacity-85">
             <button
               type="button"
               aria-label="Correr"
@@ -1485,7 +1546,7 @@ export default function App() {
               onPointerCancel={() => {
                 mobileInputRef.current.sprint = false;
               }}
-              className={`flex h-9 items-center gap-1.5 border border-white/20 bg-black/45 px-3 text-[11px] font-semibold text-slate-200 transition-transform duration-150 ${touchPulseClass("sprint")}`}
+              className={`flex h-[clamp(2.15rem,5vh,2.6rem)] items-center gap-1.5 border border-white/20 bg-black/45 px-3 text-[11px] font-semibold text-slate-200 transition-transform duration-150 ${touchPulseClass("sprint")}`}
             >
               <Zap className="h-3.5 w-3.5 text-amber-300" />
               Correr
@@ -1545,7 +1606,7 @@ export default function App() {
                 mobileInputRef.current.moveX = 0;
                 mobileInputRef.current.moveY = 0;
               }}
-              className={`relative flex h-24 w-24 touch-none items-center justify-center rounded-full border border-white/25 bg-black/40 shadow-lg transition-transform duration-150 sm:h-28 sm:w-28 md:h-32 md:w-32 ${touchPulseClass("joystick")}`}
+              className={`relative flex h-[clamp(5.75rem,14vmin,8.25rem)] w-[clamp(5.75rem,14vmin,8.25rem)] touch-none items-center justify-center rounded-full border border-white/25 bg-black/40 shadow-lg transition-transform duration-150 ${touchPulseClass("joystick")}`}
             >
               <span className="pointer-events-none absolute top-1.5 text-[9px] font-bold text-slate-300/75">
                 ▲
@@ -1563,13 +1624,13 @@ export default function App() {
                 style={{
                   transform: `translate(${joystickKnob.x}px, ${joystickKnob.y}px)`,
                 }}
-                className="pointer-events-none h-10 w-10 rounded-full border border-cyan-300/75 bg-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.35)] sm:h-11 sm:w-11"
+                className="pointer-events-none h-[clamp(2.25rem,5.5vmin,3rem)] w-[clamp(2.25rem,5.5vmin,3rem)] rounded-full border border-cyan-300/75 bg-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.35)]"
               />
             </div>
           </div>
 
-          {/* Direita: Ações táticas com ícones + Controle de Câmera translúcidos */}
-          <div className="pointer-events-auto flex flex-col items-end gap-1.5 opacity-85">
+          {/* Direita: Grade 2x2 no vertical estreito / linha ampla no paisagem + Câmera e Interação */}
+          <div className="pointer-events-auto flex max-w-[56vw] sm:max-w-none flex-col items-end gap-1.5 opacity-85">
             <div className="flex items-center gap-1.5 border border-white/15 bg-black/45 px-2 py-0.5 text-[10px] text-slate-300">
               <Smartphone className="h-3 w-3 text-cyan-400" />
               <span>{touchSensitivity.toFixed(1)}x</span>
@@ -1581,11 +1642,11 @@ export default function App() {
                 aria-label="Sensibilidade touch"
                 value={touchSensitivity}
                 onChange={(e) => setTouchSensitivity(Number(e.target.value))}
-                className="w-14 accent-cyan-400"
+                className="w-12 sm:w-16 accent-cyan-400"
               />
             </div>
 
-            <div className="flex flex-wrap justify-end gap-1">
+            <div className="grid grid-cols-2 gap-1 sm:flex sm:flex-wrap sm:justify-end">
               {telemetry.hidingInLocker && (
                 <button
                   type="button"
@@ -1603,7 +1664,7 @@ export default function App() {
                   onPointerCancel={() => {
                     mobileInputRef.current.holdBreath = false;
                   }}
-                  className={`flex h-9 items-center gap-1 border border-cyan-400/60 bg-cyan-950/70 px-2.5 text-[10px] font-semibold text-cyan-100 transition-transform duration-150 ${touchPulseClass("breath")}`}
+                  className={`col-span-2 flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-cyan-400/60 bg-cyan-950/70 px-2.5 text-[10px] font-semibold text-cyan-100 transition-transform duration-150 ${touchPulseClass("breath")}`}
                 >
                   <Wind className="h-3.5 w-3.5" />
                   Fôlego
@@ -1615,7 +1676,7 @@ export default function App() {
                 onClick={() =>
                   triggerTouchPulse("crouch", () => dispatchGameKey("KeyC", "keydown"))
                 }
-                className={`flex h-9 items-center gap-1 border border-white/20 bg-black/45 px-2 text-[10px] font-semibold text-slate-200 transition-transform duration-150 ${touchPulseClass("crouch")}`}
+                className={`flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-white/20 bg-black/45 px-2 text-[10px] font-semibold text-slate-200 transition-transform duration-150 ${touchPulseClass("crouch")}`}
               >
                 <Footprints className="h-3.5 w-3.5 text-slate-300" />
                 Agachar
@@ -1626,7 +1687,7 @@ export default function App() {
                 onClick={() =>
                   triggerTouchPulse("flashlight", () => dispatchGameKey("KeyL", "keydown"))
                 }
-                className={`flex h-9 items-center gap-1 border border-amber-400/40 bg-black/45 px-2 text-[10px] font-semibold text-amber-200 transition-transform duration-150 ${touchPulseClass("flashlight", "amber")}`}
+                className={`flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-amber-400/40 bg-black/45 px-2 text-[10px] font-semibold text-amber-200 transition-transform duration-150 ${touchPulseClass("flashlight", "amber")}`}
               >
                 <Flashlight className="h-3.5 w-3.5" />
                 Lanterna
@@ -1637,7 +1698,7 @@ export default function App() {
                 onClick={() =>
                   triggerTouchPulse("tricorder", () => dispatchGameKey("KeyT", "keydown"))
                 }
-                className={`flex h-9 items-center gap-1 border border-cyan-400/40 bg-black/45 px-2 text-[10px] font-semibold text-cyan-200 transition-transform duration-150 ${touchPulseClass("tricorder")}`}
+                className={`flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-cyan-400/40 bg-black/45 px-2 text-[10px] font-semibold text-cyan-200 transition-transform duration-150 ${touchPulseClass("tricorder")}`}
               >
                 <Cpu className="h-3.5 w-3.5" />
                 Tricorder
@@ -1658,7 +1719,7 @@ export default function App() {
                 onPointerCancel={() => {
                   mobileInputRef.current.dynamo = false;
                 }}
-                className={`flex h-9 items-center gap-1 border border-emerald-400/40 bg-black/45 px-2 text-[10px] font-semibold text-emerald-200 transition-transform duration-150 ${touchPulseClass("dynamo")}`}
+                className={`flex h-[clamp(2.15rem,5vh,2.6rem)] items-center justify-center gap-1 border border-emerald-400/40 bg-black/45 px-2 text-[10px] font-semibold text-emerald-200 transition-transform duration-150 ${touchPulseClass("dynamo")}`}
               >
                 <Zap className="h-3.5 w-3.5" />
                 Dínamo
@@ -1682,7 +1743,7 @@ export default function App() {
                 onPointerCancel={() => {
                   mobileInputRef.current.lookX = 0;
                 }}
-                className={`h-10 w-10 border border-white/20 bg-black/45 text-xs font-bold text-slate-200 transition-transform duration-150 ${touchPulseClass("look-left")}`}
+                className={`h-[clamp(2.35rem,5.5vh,2.8rem)] w-[clamp(2.35rem,5.5vh,2.8rem)] border border-white/20 bg-black/45 text-xs font-bold text-slate-200 transition-transform duration-150 ${touchPulseClass("look-left")}`}
               >
                 ↺
               </button>
@@ -1702,7 +1763,7 @@ export default function App() {
                 onPointerCancel={() => {
                   mobileInputRef.current.lookX = 0;
                 }}
-                className={`h-10 w-10 border border-white/20 bg-black/45 text-xs font-bold text-slate-200 transition-transform duration-150 ${touchPulseClass("look-right")}`}
+                className={`h-[clamp(2.35rem,5.5vh,2.8rem)] w-[clamp(2.35rem,5.5vh,2.8rem)] border border-white/20 bg-black/45 text-xs font-bold text-slate-200 transition-transform duration-150 ${touchPulseClass("look-right")}`}
               >
                 ↻
               </button>
@@ -1723,7 +1784,7 @@ export default function App() {
                     }
                   })
                 }
-                className={`flex h-10 items-center gap-1.5 border border-amber-400/55 bg-black/55 px-3 text-[11px] font-bold text-amber-200 transition-transform duration-150 ${touchPulseClass("interagir", "amber")}`}
+                className={`flex h-[clamp(2.35rem,5.5vh,2.8rem)] items-center gap-1.5 border border-amber-400/55 bg-black/55 px-2.5 sm:px-3 text-[11px] font-bold text-amber-200 transition-transform duration-150 ${touchPulseClass("interagir", "amber")}`}
               >
                 <Hand className="h-3.5 w-3.5" />
                 {telemetry.hidingInLocker ? "Sair" : "Interagir"}

@@ -12,6 +12,7 @@ import {
   PHYSICS_PARAMS,
   computeDollyZoomFov,
   computePanicMetrics,
+  computeResponsiveFov,
   evaluateNewbornPerception,
   findNextNavWaypoint,
   hasWallLineOfSight,
@@ -24,6 +25,7 @@ import {
   MedicalWingHandles,
   buildChapterScene,
 } from "../game/threeSceneBuilder";
+import { useOrientation } from "../hooks/useOrientation";
 
 export interface LiveTelemetry {
   batterySec: number;
@@ -188,6 +190,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   mobileInputRef,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const orientation = useOrientation();
+  const syncViewportRef = useRef<(() => void) | null>(null);
 
   const stateRef = useRef({
     chapter,
@@ -333,8 +337,20 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     );
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    const initW = container.clientWidth || window.innerWidth;
-    const initH = container.clientHeight || window.innerHeight;
+    const getViewportSize = () => {
+      const vv = window.visualViewport;
+      const w = Math.max(
+        1,
+        Math.round(container.clientWidth || vv?.width || window.innerWidth)
+      );
+      const h = Math.max(
+        1,
+        Math.round(container.clientHeight || vv?.height || window.innerHeight)
+      );
+      return { w, h };
+    };
+
+    const { w: initW, h: initH } = getViewportSize();
     renderer.setSize(initW, initH);
 
     container.innerHTML = "";
@@ -347,9 +363,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     scene.environmentIntensity = 0.16;
     pmremGenerator.dispose();
 
+    const initAspect = initW / initH;
     const camera = new THREE.PerspectiveCamera(
-      PHYSICS_PARAMS.defaultFov,
-      initW / initH,
+      computeResponsiveFov(PHYSICS_PARAMS.defaultFov, initAspect),
+      initAspect,
       0.08,
       55
     );
@@ -656,15 +673,31 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     window.addEventListener("blur", clearInputs);
     document.addEventListener("visibilitychange", clearInputs);
 
-    const resizeObserver = new ResizeObserver(() => {
-      const w = container.clientWidth || window.innerWidth;
-      const h = container.clientHeight || window.innerHeight;
-      camera.aspect = w / h;
+    const syncViewportSize = () => {
+      const { w, h } = getViewportSize();
+      const nextAspect = w / h;
+      renderer.setPixelRatio(
+        isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2)
+      );
+      camera.aspect = nextAspect;
+      camera.fov = computeResponsiveFov(PHYSICS_PARAMS.defaultFov, nextAspect);
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
       composer?.setSize(w, h);
-    });
+    };
+
+    const resizeObserver = new ResizeObserver(syncViewportSize);
     resizeObserver.observe(container);
+    syncViewportRef.current = syncViewportSize;
+    const screenOri = (
+      window.screen as Screen & {
+        orientation?: EventTarget;
+      }
+    )?.orientation;
+    window.addEventListener("resize", syncViewportSize);
+    window.addEventListener("orientationchange", syncViewportSize);
+    window.visualViewport?.addEventListener("resize", syncViewportSize);
+    screenOri?.addEventListener?.("change", syncViewportSize);
 
     function findNearestInteractable(): { id: string; label: string } | null {
       const s = simRef.current;
@@ -1382,13 +1415,14 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         externalHeartbeatActive: st.health === "vermelho",
       });
 
-      // Dolly Zoom dinâmico (FOV 64° -> 54° / 50° quando detectado ou ferido)
-      const targetFov = computeDollyZoomFov(
+      // Dolly Zoom dinâmico + compensação automática para modo Vertical (aspect < 1)
+      const dollyBaseFov = computeDollyZoomFov(
         distPlayer,
         world.newborn.root.visible,
         s.newbornState,
         st.health
       );
+      const targetFov = computeResponsiveFov(dollyBaseFov, camera.aspect);
       if (Math.abs(camera.fov - targetFov) > 0.05) {
         camera.fov = THREE.MathUtils.damp(camera.fov, targetFov, 5.2, dt);
         camera.updateProjectionMatrix();
@@ -1547,7 +1581,12 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     return () => {
       cancelAnimationFrame(frameId);
       clearTimeout(frameId);
+      syncViewportRef.current = null;
       resizeObserver.disconnect();
+      window.removeEventListener("resize", syncViewportSize);
+      window.removeEventListener("orientationchange", syncViewportSize);
+      window.visualViewport?.removeEventListener("resize", syncViewportSize);
+      screenOri?.removeEventListener?.("change", syncViewportSize);
       renderer.domElement.removeEventListener("touchstart", onTouchStart);
       renderer.domElement.removeEventListener("touchmove", onTouchMove);
       renderer.domElement.removeEventListener("touchend", onTouchEnd);
@@ -1577,11 +1616,23 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     };
   }, [soundEngine, mobileInputRef, chapter.id]);
 
+  // Atualiza aspecto e FOV instantaneamente sempre que useOrientation detectar mudança de tela/rotação
+  useEffect(() => {
+    syncViewportRef.current?.();
+  }, [
+    orientation.width,
+    orientation.height,
+    orientation.aspect,
+    orientation.angle,
+    orientation.orientationType,
+  ]);
+
   return (
     <div
       ref={mountRef}
       data-testid="vanguard-3d-viewport"
-      className="fixed inset-0 z-0 h-full w-full touch-none bg-[#030509]"
+      data-orientation={orientation.isPortrait ? "portrait" : "landscape"}
+      className="fixed inset-0 z-0 h-[100dvh] w-[100vw] touch-none bg-[#030509]"
     />
   );
 };

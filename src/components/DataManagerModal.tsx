@@ -66,9 +66,9 @@ export const DataManagerModal: React.FC<DataManagerModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label="Configurações e Gerenciador de Dados"
-      className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-[#05080d]/92 p-3 sm:p-6"
+      className="safe-area-modal fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-[#05080d]/92 p-3 sm:p-6"
     >
-      <div className="my-auto w-full max-w-2xl border border-amber-500/45 bg-[#0a0f17] p-5 sm:p-6 shadow-2xl">
+      <div className="my-auto max-h-[92dvh] w-full max-w-2xl overflow-y-auto border border-amber-500/45 bg-[#0a0f17] p-4 sm:p-6 shadow-2xl">
         <div className="flex items-start justify-between gap-4 border-b border-slate-800 pb-4">
           <div>
             <div className="font-mono-tabular text-[11px] uppercase tracking-[0.2em] text-amber-400">

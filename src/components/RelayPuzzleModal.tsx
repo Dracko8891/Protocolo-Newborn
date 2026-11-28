@@ -59,9 +59,9 @@ export const RelayPuzzleModal: React.FC<RelayPuzzleModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-label="Painel de Relés de Emergência"
-      className="fixed inset-0 z-40 flex items-center justify-center bg-[#07090d]/85 p-4"
+      className="safe-area-modal fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-[#07090d]/85 p-3 sm:p-4"
     >
-      <div className="w-full max-w-xl border border-amber-500/40 bg-[#0d121b] p-6 shadow-2xl">
+      <div className="my-auto max-h-[92dvh] w-full max-w-xl overflow-y-auto border border-amber-500/40 bg-[#0d121b] p-4 sm:p-6 shadow-2xl">
         <div className="flex items-center justify-between border-b border-slate-700/70 pb-3">
           <div>
             <p className="font-mono-tabular text-xs text-amber-400">
