@@ -1245,6 +1245,13 @@ export default function App() {
           )
         }
         onAmbushWarning={() => showToast("Barulho nos dutos acima... prepare-se!")}
+        isPanelModalOpen={relayOpen || keypadOpen}
+        onDangerClosePanel={() => {
+          setRelayOpen(false);
+          setKeypadOpen(false);
+          vibratePattern([45, 25, 45]);
+          showToast("Perigo próximo!");
+        }}
         resetSignal={resetSignal}
         quickTurnSignal={quickTurnSignal}
         deployDecoySignal={deployDecoySignal}

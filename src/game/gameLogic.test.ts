@@ -22,6 +22,7 @@ import {
   resolveCircleWallCollision,
   resolveEffectiveGraphics,
   resolveTouchControlsActive,
+  selectSafeNewbornSpawn,
   shouldEnableTouchControlsByDefault,
   validateKeypadCode,
   validateRelayPuzzle,
@@ -589,5 +590,55 @@ test("Presets gráficos ARM Mali, Relatório de Incidente S/A/B/C, Stealth Expos
   });
   assert.equal(warningTick.ambushFlickerWarning, true);
 });
+
+test("Spawn do Newborn ao acionar Painel de Relés respeita >= 14m, fora da saída e com janela de graça sem Hunt instantâneo", () => {
+  for (const id of [1, 2, 3, 4, 5, 6, 7] as ChapterId[]) {
+    const ch = CHAPTER_CONFIGS[id];
+    const px = ch.relayPos.x;
+    const pz = ch.relayPos.z - 0.35;
+    const picked = selectSafeNewbornSpawn({
+      playerX: px,
+      playerZ: pz,
+      playerYaw: 0,
+      exitPos: ch.exitPos,
+      walls: ch.walls,
+      candidates: [...ch.patrolPoints, ...ch.navNodes],
+      minDistanceM: 14.0,
+    });
+
+    const distToPlayer = Math.hypot(picked.x - px, picked.z - pz);
+    const distToExit = Math.hypot(picked.x - ch.exitPos.x, picked.z - ch.exitPos.z);
+    const resolved = resolveCircleWallCollision(picked.x, picked.z, 0.45, ch.walls);
+
+    assert.ok(
+      distToPlayer >= 14.0,
+      `Cap. ${id} spawn muito perto do painel (${distToPlayer.toFixed(2)}m)`
+    );
+    assert.ok(
+      distToExit >= 4.2,
+      `Cap. ${id} spawn bloqueando a saída (${distToExit.toFixed(2)}m)`
+    );
+    assert.ok(
+      Math.hypot(resolved.x - picked.x, resolved.z - picked.z) < 0.05,
+      `Cap. ${id} spawn dentro de parede`
+    );
+  }
+
+  const duringGrace = evaluateNewbornPerception({
+    distanceM: 3.0,
+    hasLineOfSight: true,
+    flashlightOn: true,
+    roomLit: false,
+    playerNoiseM: PHYSICS_PARAMS.noiseSprintM,
+    playerHidingInLocker: false,
+    breathHeld: false,
+    playerBleeding: true,
+    stunTimerSec: 0,
+    spawnGraceSec: 4.0,
+    currentState: "Investigate",
+  });
+  assert.notEqual(duringGrace.nextState, "Hunt");
+});
+
 
 

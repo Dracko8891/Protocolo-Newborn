@@ -110,6 +110,16 @@
   animation: hud-glitch-rgb 0.18s infinite steps(2, end);
 }
 
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.94;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
 .locker-slits-overlay {
   background: repeating-linear-gradient(
     to bottom,
@@ -119,5 +129,7 @@
     rgba(4, 6, 10, 0.08) 34px
   );
   box-shadow: inset 0 0 110px rgba(2, 4, 8, 0.92);
+  animation: pulse 3.8s ease-in-out infinite;
 }
+
 

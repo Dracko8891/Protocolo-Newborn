@@ -645,7 +645,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 7.2, hideX: 7.6, hideZ: 7.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: -1.0, z: 2.2, rotY: Math.PI / 2 },
+    wallMapPos: { x: -1.4, z: 2.2, rotY: Math.PI / 2 },
     decoyPos: { x: 5.4, z: 6.2 },
     containmentDoor: {
       id: "containment_door",
@@ -736,7 +736,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.2, z: 9.2, hideX: 7.7, hideZ: 9.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: -2.0, z: 1.1, rotY: 0 },
+    wallMapPos: { x: -1.4, z: 1.56, rotY: Math.PI },
     decoyPos: { x: 4.0, z: 2.4 },
     containmentDoor: {
       id: "containment_door",
@@ -820,7 +820,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 5.8, hideX: 7.6, hideZ: 5.8, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: -1.0, z: 1.8, rotY: Math.PI / 2 },
+    wallMapPos: { x: -1.4, z: 1.9, rotY: Math.PI / 2 },
     decoyPos: { x: -7.2, z: 4.6 },
     containmentDoor: {
       id: "containment_door",
@@ -911,7 +911,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.2, z: 6.4, hideX: 7.7, hideZ: 6.4, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: 0, z: 0.5, rotY: 0 },
+    wallMapPos: { x: -2.35, z: -2.4, rotY: Math.PI / 2 },
     decoyPos: { x: -4.6, z: 10.8 },
     containmentDoor: {
       id: "containment_door",
@@ -999,7 +999,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 11.4, hideX: 7.6, hideZ: 11.4, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: 0, z: 2.2, rotY: 0 },
+    wallMapPos: { x: -5.35, z: 2.8, rotY: Math.PI / 2 },
     decoyPos: { x: -3.8, z: 10.6 },
     containmentDoor: {
       id: "containment_door",
@@ -1092,7 +1092,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 10.6, hideX: 7.6, hideZ: 10.6, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: 2.6, z: -0.2, rotY: 0 },
+    wallMapPos: { x: 0.8, z: 1.16, rotY: Math.PI },
     decoyPos: { x: 6.4, z: 3.0 },
     containmentDoor: {
       id: "containment_door",
@@ -1178,7 +1178,7 @@ export const CHAPTER_CONFIGS: Record<ChapterId, ChapterConfig> = {
     lockerPos: { x: 8.1, z: 8.2, hideX: 7.6, hideZ: 8.2, rotY: -Math.PI / 2 },
     relayPos: { x: 2.8, z: 13.35 },
     exitPos: { x: 0, z: 13.4 },
-    wallMapPos: { x: 0, z: 0.4, rotY: 0 },
+    wallMapPos: { x: 2.8, z: 1.36, rotY: Math.PI },
     decoyPos: { x: 7.2, z: 2.6 },
     containmentDoor: {
       id: "containment_door",
@@ -1478,6 +1478,7 @@ export interface PerceptionInput {
   breathHeld: boolean;
   playerBleeding: boolean;
   stunTimerSec: number;
+  spawnGraceSec?: number;
   currentState: NewbornAIState;
   sightRangeMult?: number;
 }
@@ -1489,6 +1490,15 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
 } {
   if (input.stunTimerSec > 0) {
     return { nextState: "Stunned", detectedBy: "stun", veinsColor: "crimson" };
+  }
+
+  // Janela de graça após spawn/queda do duto: nunca entra em Hunt nem causa morte imediata
+  if ((input.spawnGraceSec ?? 0) > 0) {
+    return {
+      nextState: input.currentState === "Patrol" ? "Patrol" : "Investigate",
+      detectedBy: "none",
+      veinsColor: "cyan",
+    };
   }
 
   if (input.playerHidingInLocker) {
@@ -1534,6 +1544,89 @@ export function evaluateNewbornPerception(input: PerceptionInput): {
     detectedBy: "none",
     veinsColor: "off",
   };
+}
+
+export interface SafeNewbornSpawnInput {
+  playerX: number;
+  playerZ: number;
+  playerYaw: number;
+  exitPos: { x: number; z: number };
+  walls: AABBWall[];
+  candidates: NavNode[];
+  minDistanceM?: number;
+}
+
+function isPointClearOfSolidWalls(
+  x: number,
+  z: number,
+  radius: number,
+  walls: AABBWall[]
+): boolean {
+  for (const w of walls) {
+    const cx = Math.max(w.minX, Math.min(x, w.maxX));
+    const cz = Math.max(w.minZ, Math.min(z, w.maxZ));
+    if (Math.hypot(x - cx, z - cz) < radius) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Seleciona um ponto de spawn/queda do duto justo para o Newborn:
+ * - Garante distância mínima segura (>= 14m sempre que houver candidato válido, ou o mais distante possível);
+ * - Evita o campo de visão imediato do jogador e nunca bloqueia a saída imediata da sala do painel.
+ */
+export function selectSafeNewbornSpawn(input: SafeNewbornSpawnInput): NavNode {
+  const minDistance = input.minDistanceM ?? 14.0;
+  const fallbackPool: NavNode[] = [
+    ...input.candidates,
+    { x: -6.8, z: -3.6 },
+    { x: 6.8, z: -3.6 },
+    { x: 0, z: -4.2 },
+    { x: -7.4, z: 3.2 },
+    { x: 7.4, z: 3.2 },
+  ];
+
+  const valid = fallbackPool.filter((c) =>
+    isPointClearOfSolidWalls(c.x, c.z, 0.45, input.walls)
+  );
+  const pool = valid.length > 0 ? valid : fallbackPool;
+
+  const fwdX = Math.sin(input.playerYaw);
+  const fwdZ = Math.cos(input.playerYaw);
+
+  let bestNode = pool[0];
+  let bestScore = -Infinity;
+
+  for (const c of pool) {
+    const dx = c.x - input.playerX;
+    const dz = c.z - input.playerZ;
+    const dist = Math.hypot(dx, dz);
+    const exitDist = Math.hypot(c.x - input.exitPos.x, c.z - input.exitPos.z);
+
+    // Dot product para penalizar spawn bem na frente do jogador
+    const inv = dist > 0.01 ? 1 / dist : 1;
+    const forwardDot = dx * inv * fwdX + dz * inv * fwdZ;
+    const outOfView = forwardDot < 0.45;
+    const clearOfExit = exitDist >= 4.2;
+
+    let score = dist;
+    if (dist >= minDistance) {
+      score += 100;
+      // Faixa ideal 14..18m sem punir distâncias maiores se necessário
+      if (dist <= 18.5) score += 12;
+    }
+    if (outOfView) score += 25;
+    if (clearOfExit) score += 35;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestNode = c;
+    }
+  }
+
+  return bestNode;
 }
 
 export function computeStealthExposurePct(input: {

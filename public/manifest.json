@@ -2,7 +2,7 @@
   "jogo": "Protocolo Newborn",
   "repositorio": "Dracko8891/Protocolo-Newborn",
   "versao_manifesto": "1.0.0",
-  "atualizado_em": "2026-11-28T11:54:08.123Z",
+  "atualizado_em": "2026-11-28T12:48:28.219Z",
   "niveis": [
     {
       "id": "fase_01",
@@ -11,7 +11,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.71,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_01.zip",
-      "sha256_hash": "7ebfb561262aa9394a76e973ff9300e34e3c2e3f2a6b10e230fda318139489f4"
+      "sha256_hash": "28e67915b7c661049b9fabc083965aea7742e3cae6cf9ef31a4019f2de416ad4"
     },
     {
       "id": "fase_02",
@@ -20,7 +20,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_02.zip",
-      "sha256_hash": "1d906573ed3a82acc0745fda9ee5fa4a314437eedb00fc86c6e8879b466a8bca"
+      "sha256_hash": "2b3e152978548e6e60e531780b878b0dcd11f3c81ff67a243560dc355158f427"
     },
     {
       "id": "fase_03",
@@ -29,7 +29,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_03.zip",
-      "sha256_hash": "38a75ccff8cccc5f6ffbb12116544923fc598b378a9dd1090be4591cf0268c48"
+      "sha256_hash": "409c3152955b0ce6d66413865d258cd715d28fa795db0b922516d50c3adf224e"
     },
     {
       "id": "fase_04",
@@ -38,7 +38,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.72,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_04.zip",
-      "sha256_hash": "ffc2abc572250f8a4234d95724e99f18585418701b09ffc38a959a72458576ce"
+      "sha256_hash": "586908d5e9808c747bbfb88e84608b99bc086616a85f4f77486615cc89e0b251"
     },
     {
       "id": "fase_05",
@@ -47,7 +47,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.7,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_05.zip",
-      "sha256_hash": "b5a871f7d53bcd134f44ac67b2616a11e566dbe171c3889aa5f58e5afdae0ae8"
+      "sha256_hash": "c6c3dd03b0fa018a6281387b012ab797708ac77eb58dd39b04f7029c35fbf3fa"
     },
     {
       "id": "fase_06",
@@ -56,7 +56,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.71,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_06.zip",
-      "sha256_hash": "e521df00f2884098f600b00dd5858041a19e128896a0f6654389a14a6b08bd2a"
+      "sha256_hash": "6c8f44bd7f07ddc4461f5d913481edcc5d5662c404af867c22d5011419a6b911"
     },
     {
       "id": "fase_07",
@@ -65,7 +65,7 @@
       "versão": "1.0.0",
       "tamanho_mb": 0.72,
       "url_download": "https://github.com/Dracko8891/Protocolo-Newborn/releases/download/levels-v1.0.0/fase_07.zip",
-      "sha256_hash": "0a3213ad4bfbe264c8e72f8942c7c1ab445f0116e8d0bf61d77accde71fb77e8"
+      "sha256_hash": "e5413a0ca5231ead8655b47ef634255fbe43a8559c2d746b5c6fdb9aef05aaaa"
     }
   ]
 }

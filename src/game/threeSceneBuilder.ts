@@ -1,13 +1,18 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { ChapterConfig, PHYSICS_PARAMS } from "./gameLogic";
 import { getChapterAssetBlobUrl } from "./levelStorage";
 import {
+  buildBadgeCardTexture,
   buildBeamConeTexture,
   buildCeilingGrateTexture,
   buildCrtFaceTexture,
   buildFloorTileTexture,
   buildGrimyGlassTexture,
+  buildIndustrialLockerTexture,
+  buildKeypadPanelTexture,
   buildNewbornSkinMaps,
+  buildRelayFaceTexture,
   buildTricorderScreenTexture,
   buildWallPanelTexture,
   configureAssetLoaders,
@@ -87,13 +92,101 @@ export interface SceneBuildOptions {
   shadowsEnabled?: boolean;
 }
 
+const _m4 = new THREE.Matrix4();
+const _quat = new THREE.Quaternion();
+const _euler = new THREE.Euler();
+const _pos = new THREE.Vector3();
+const _scl = new THREE.Vector3();
+
+/**
+ * Normaliza atributos (não-indexado, normal, uv, e opcionalmente vertexColors)
+ * para mesclagem segura via BufferGeometryUtils.mergeGeometries sem falhas em ARM Mali.
+ */
+function mergeNormalizedGeometries(
+  geos: THREE.BufferGeometry[],
+  withVertexColors = false,
+  disposeInputs = true
+): THREE.BufferGeometry {
+  if (geos.length === 0) {
+    return new THREE.BufferGeometry();
+  }
+  const normalized: THREE.BufferGeometry[] = [];
+  for (const src of geos) {
+    const g = src.index ? src.toNonIndexed() : src.clone();
+    const pos = g.getAttribute("position");
+    if (!pos || pos.count === 0) {
+      g.dispose();
+      continue;
+    }
+    if (!g.getAttribute("normal")) {
+      g.computeVertexNormals();
+    }
+    if (!g.getAttribute("uv")) {
+      g.setAttribute(
+        "uv",
+        new THREE.BufferAttribute(new Float32Array(pos.count * 2), 2)
+      );
+    }
+    if (withVertexColors) {
+      if (!g.getAttribute("color")) {
+        const cols = new Float32Array(pos.count * 3);
+        cols.fill(1.0);
+        g.setAttribute("color", new THREE.BufferAttribute(cols, 3));
+      }
+    } else if (g.getAttribute("color")) {
+      g.deleteAttribute("color");
+    }
+    if (g.getAttribute("tangent")) {
+      g.deleteAttribute("tangent");
+    }
+    normalized.push(g);
+  }
+
+  if (disposeInputs) {
+    for (const src of geos) {
+      src.dispose();
+    }
+  }
+
+  if (normalized.length === 0) {
+    return new THREE.BufferGeometry();
+  }
+  const merged = mergeGeometries(normalized, false);
+  for (const g of normalized) {
+    g.dispose();
+  }
+  return merged ?? new THREE.BufferGeometry();
+}
+
+function placeGeo(
+  geo: THREE.BufferGeometry,
+  x: number,
+  y: number,
+  z: number,
+  rx = 0,
+  ry = 0,
+  rz = 0,
+  sx = 1,
+  sy = 1,
+  sz = 1
+): THREE.BufferGeometry {
+  const clone = geo.clone();
+  _pos.set(x, y, z);
+  _euler.set(rx, ry, rz);
+  _quat.setFromEuler(_euler);
+  _scl.set(sx, sy, sz);
+  _m4.compose(_pos, _quat, _scl);
+  clone.applyMatrix4(_m4);
+  return clone;
+}
+
 function applyBoxVertexAO(geo: THREE.BufferGeometry, height: number): void {
   const pos = geo.getAttribute("position");
   if (!pos) return;
   const colors = new Float32Array(pos.count * 3);
   const halfH = Math.max(0.1, height * 0.5);
   for (let i = 0; i < pos.count; i++) {
-    const yNorm = (pos.getY(i) + halfH) / (halfH * 2); // 0 = base, 1 = top
+    const yNorm = (pos.getY(i) + halfH) / (halfH * 2);
     let shade = 1.0;
     if (yNorm < 0.2) shade = 0.62;
     else if (yNorm > 0.85) shade = 0.78;
@@ -102,6 +195,23 @@ function applyBoxVertexAO(geo: THREE.BufferGeometry, height: number): void {
     colors[i * 3 + 2] = shade;
   }
   geo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+}
+
+function createRoundedBoxShape(w: number, h: number, r: number): THREE.Shape {
+  const shape = new THREE.Shape();
+  const hw = w * 0.5;
+  const hh = h * 0.5;
+  const cr = Math.min(r, hw * 0.45, hh * 0.45);
+  shape.moveTo(-hw + cr, -hh);
+  shape.lineTo(hw - cr, -hh);
+  shape.quadraticCurveTo(hw, -hh, hw, -hh + cr);
+  shape.lineTo(hw, hh - cr);
+  shape.quadraticCurveTo(hw, hh, hw - cr, hh);
+  shape.lineTo(-hw + cr, hh);
+  shape.quadraticCurveTo(-hw, hh, -hw, hh - cr);
+  shape.lineTo(-hw, -hh + cr);
+  shape.quadraticCurveTo(-hw, -hh, -hw + cr, -hh);
+  return shape;
 }
 
 function buildWallMapCanvasTexture(chapter: ChapterConfig): THREE.CanvasTexture {
@@ -130,7 +240,6 @@ function buildWallMapCanvasTexture(chapter: ChapterConfig): THREE.CanvasTexture 
     ctx.strokeRect(rx, ry, rw, rh);
   }
 
-  // Marcador VOCÊ ESTÁ AQUI
   const mx = mapX(chapter.wallMapPos.x);
   const mz = mapZ(chapter.wallMapPos.z);
   ctx.fillStyle = "#f59e0b";
@@ -191,7 +300,6 @@ export function attachFirstPersonViewmodel(
     emissiveIntensity: 1.25,
     roughness: 0.2,
   });
-  // Cone translucido removido de uso ativo para evitar artefato de Raio-X/azul em GPUs ARM Mali
   const beamConeTex = buildBeamConeTexture();
   const beamConeMat = new THREE.MeshBasicMaterial({
     map: beamConeTex,
@@ -210,117 +318,102 @@ export function attachFirstPersonViewmodel(
     beamConeMat
   );
 
-  // Mão Direita: Lanterna Tática de Dínamo multi-peças + feixe atmosférico
+  // Mão Direita: Lanterna Tática de Dínamo mesclada em poucas draw calls
   const rightHand = new THREE.Group();
   rightHand.position.set(0.24, -0.22, -0.38);
 
-  const armGeo = new THREE.CylinderGeometry(0.036, 0.046, 0.34, 12);
-  const rightArmMesh = new THREE.Mesh(armGeo, sleeveMat);
-  rightArmMesh.rotation.x = Math.PI * 0.42;
-  rightArmMesh.position.set(0.03, -0.05, 0.14);
+  const armBase = new THREE.CylinderGeometry(0.036, 0.046, 0.34, 12);
+  const rightArmGeo = placeGeo(armBase, 0.03, -0.05, 0.14, Math.PI * 0.42);
+  const rightArmMesh = new THREE.Mesh(rightArmGeo, sleeveMat);
 
-  const gripGeo = new THREE.BoxGeometry(0.052, 0.048, 0.075);
-  const rightGlove = new THREE.Mesh(gripGeo, gloveMat);
-  rightGlove.position.set(0, -0.005, 0.01);
+  const gripBase = new THREE.BoxGeometry(0.052, 0.048, 0.075);
+  const fingerBase = new THREE.CylinderGeometry(0.008, 0.007, 0.042, 6);
+  const gloveParts: THREE.BufferGeometry[] = [
+    placeGeo(gripBase, 0, -0.005, 0.01),
+    placeGeo(fingerBase, -0.022, 0.008, -0.018, 0, 0, Math.PI / 2),
+    placeGeo(fingerBase, -0.022, 0.008, 0.0, 0, 0, Math.PI / 2),
+    placeGeo(fingerBase, -0.022, 0.008, 0.018, 0, 0, Math.PI / 2),
+  ];
+  const rightGloveGeo = mergeNormalizedGeometries(gloveParts);
+  const rightGlove = new THREE.Mesh(rightGloveGeo, gloveMat);
 
-  const fingerGeo = new THREE.CylinderGeometry(0.008, 0.007, 0.042, 6);
-  for (let f = 0; f < 3; f++) {
-    const finger = new THREE.Mesh(fingerGeo, gloveMat);
-    finger.rotation.z = Math.PI / 2;
-    finger.position.set(-0.022, 0.008, -0.018 + f * 0.018);
-    rightHand.add(finger);
-  }
+  const barrelBase = new THREE.CylinderGeometry(0.019, 0.018, 0.21, 14);
+  const headBase = new THREE.CylinderGeometry(0.029, 0.021, 0.05, 14);
+  const flashlightMetalGeo = mergeNormalizedGeometries([
+    placeGeo(barrelBase, 0, 0.012, -0.04, Math.PI / 2),
+    placeGeo(headBase, 0, 0.012, -0.155, Math.PI / 2),
+  ]);
+  const barrel = new THREE.Mesh(flashlightMetalGeo, metalDarkMat);
 
-  const barrelGeo = new THREE.CylinderGeometry(0.019, 0.018, 0.21, 14);
-  const barrel = new THREE.Mesh(barrelGeo, metalDarkMat);
-  barrel.rotation.x = Math.PI / 2;
-  barrel.position.set(0, 0.012, -0.04);
-
-  const collarGeo = new THREE.CylinderGeometry(0.022, 0.022, 0.055, 14);
-  const collar = new THREE.Mesh(collarGeo, knurlMat);
-  collar.rotation.x = Math.PI / 2;
-  collar.position.set(0, 0.012, -0.08);
-
-  const headGeo = new THREE.CylinderGeometry(0.029, 0.021, 0.05, 14);
-  const head = new THREE.Mesh(headGeo, metalDarkMat);
-  head.rotation.x = Math.PI / 2;
-  head.position.set(0, 0.012, -0.155);
+  const collarBase = new THREE.CylinderGeometry(0.022, 0.022, 0.055, 14);
+  const collar = new THREE.Mesh(
+    placeGeo(collarBase, 0, 0.012, -0.08, Math.PI / 2),
+    knurlMat
+  );
 
   const lensGeo = new THREE.CircleGeometry(0.024, 14);
   const lens = new THREE.Mesh(lensGeo, flashlightLensMat);
   lens.rotation.y = Math.PI;
   lens.position.set(0, 0.012, -0.181);
 
-  // Cone oculto para manter compatibilidade sem jamais atravessar paredes em Mali
   const beamConeGeo = new THREE.ConeGeometry(0.18, 0.3, 8, 1, true);
   const beamConeMesh = new THREE.Mesh(beamConeGeo, beamConeMat);
   beamConeMesh.visible = false;
   beamConeMesh.position.set(0, 0.012, -0.182);
 
-  rightHand.add(
-    rightArmMesh,
-    rightGlove,
-    barrel,
-    collar,
-    head,
-    lens,
-    beamConeMesh
-  );
+  rightHand.add(rightArmMesh, rightGlove, barrel, collar, lens, beamConeMesh);
 
-  // Mão Esquerda: Tricorder Portátil OLED com moldura chanfrada e botões
+  // Mão Esquerda: Tricorder Portátil OLED
   const leftHand = new THREE.Group();
   leftHand.position.set(-0.24, -0.46, -0.34);
   leftHand.rotation.set(0.08, 0.28, -0.06);
 
-  const leftArmMesh = new THREE.Mesh(armGeo, sleeveMat);
-  leftArmMesh.rotation.x = Math.PI * 0.44;
-  leftArmMesh.position.set(-0.03, -0.06, 0.14);
+  const leftArmGeo = placeGeo(armBase, -0.03, -0.06, 0.14, Math.PI * 0.44);
+  const leftArmMesh = new THREE.Mesh(leftArmGeo, sleeveMat);
+  const leftGlove = new THREE.Mesh(gripBase, gloveMat);
 
-  const leftGlove = new THREE.Mesh(gripGeo, gloveMat);
   const triBodyGeo = new THREE.BoxGeometry(0.098, 0.152, 0.026);
   const triBody = new THREE.Mesh(triBodyGeo, metalDarkMat);
   triBody.rotation.x = -0.25;
   triBody.position.set(0.01, 0.035, -0.04);
 
-  const triBezelGeo = new THREE.BoxGeometry(0.088, 0.082, 0.028);
-  const triBezel = new THREE.Mesh(triBezelGeo, knurlMat);
-  triBezel.rotation.x = -0.25;
-  triBezel.position.set(0.01, 0.056, -0.036);
+  const triBezelBase = new THREE.BoxGeometry(0.088, 0.082, 0.028);
+  const triAntennaBase = new THREE.CylinderGeometry(0.004, 0.006, 0.038, 8);
+  const triDetailGeo = mergeNormalizedGeometries([
+    placeGeo(triBezelBase, 0.01, 0.056, -0.036, -0.25),
+    placeGeo(triAntennaBase, -0.028, 0.122, -0.058, -0.25),
+  ]);
+  const triBezel = new THREE.Mesh(triDetailGeo, knurlMat);
 
   const triScreenGeo = new THREE.PlaneGeometry(0.078, 0.072);
   const triScreen = new THREE.Mesh(triScreenGeo, tricorderScreenMat);
   triScreen.rotation.x = -0.25;
   triScreen.position.set(0.01, 0.056, -0.021);
 
-  const triAntennaGeo = new THREE.CylinderGeometry(0.004, 0.006, 0.038, 8);
-  const triAntenna = new THREE.Mesh(triAntennaGeo, knurlMat);
-  triAntenna.rotation.x = -0.25;
-  triAntenna.position.set(-0.028, 0.122, -0.058);
-
-  leftHand.add(
-    leftArmMesh,
-    leftGlove,
-    triBody,
-    triBezel,
-    triScreen,
-    triAntenna
-  );
+  leftHand.add(leftArmMesh, leftGlove, triBody, triBezel, triScreen);
   root.add(rightHand, leftHand);
   camera.add(root);
 
+  armBase.dispose();
+  fingerBase.dispose();
+  barrelBase.dispose();
+  headBase.dispose();
+  collarBase.dispose();
+  triBezelBase.dispose();
+  triAntennaBase.dispose();
+
   disposables.push(
-    armGeo,
-    gripGeo,
-    fingerGeo,
-    barrelGeo,
-    collarGeo,
-    headGeo,
+    rightArmGeo,
+    rightGloveGeo,
+    flashlightMetalGeo,
+    collar.geometry,
     lensGeo,
     beamConeGeo,
+    leftArmGeo,
+    gripBase,
     triBodyGeo,
-    triBezelGeo,
-    triScreenGeo,
-    triAntennaGeo
+    triDetailGeo,
+    triScreenGeo
   );
 
   return {
@@ -340,24 +433,24 @@ export function createNewbornModel(
   const root = new THREE.Group();
   const skinMaps = buildNewbornSkinMaps(maxAniso);
 
-  // Pele úmida orgânica em MeshStandardMaterial (estável em mediump ARM Mali, sem clearcoat/sheen)
+  // Materiais orgânicos estáveis em ARM Mali mediump (sem MeshPhysicalMaterial)
   const skinMat = new THREE.MeshStandardMaterial({
     color: 0xd8ccc9,
     map: skinMaps.map,
     normalMap: skinMaps.normalMap,
-    normalScale: new THREE.Vector2(1.05, 1.05),
+    normalScale: new THREE.Vector2(1.1, 1.1),
     roughnessMap: skinMaps.roughnessMap,
     roughness: 0.42,
     metalness: 0.04,
   });
   const sinewMat = new THREE.MeshStandardMaterial({
-    color: 0x3b2225,
-    roughness: 0.44,
+    color: 0x3b1f23,
+    roughness: 0.46,
     metalness: 0.05,
   });
   const socketMat = new THREE.MeshStandardMaterial({
-    color: 0x020102,
-    roughness: 0.96,
+    color: 0x030203,
+    roughness: 0.95,
   });
   const eyeGlowMat = new THREE.MeshStandardMaterial({
     color: 0xe2e8f0,
@@ -376,13 +469,13 @@ export function createNewbornModel(
     roughness: 0.22,
   });
   const clawBloodMat = new THREE.MeshStandardMaterial({
-    color: 0x3f0509,
+    color: 0x45060b,
     emissive: 0x100000,
-    roughness: 0.18,
-    metalness: 0.12,
+    roughness: 0.2,
+    metalness: 0.14,
   });
   const teethMat = new THREE.MeshStandardMaterial({
-    color: 0xbcb3a4,
+    color: 0xc2b8a8,
     roughness: 0.28,
     metalness: 0.06,
   });
@@ -398,7 +491,7 @@ export function createNewbornModel(
   );
 
   // Sombra de contato no chão
-  const shadowGeo = new THREE.CircleGeometry(0.58, 20);
+  const shadowGeo = new THREE.CircleGeometry(0.62, 20);
   const shadowMat = new THREE.MeshBasicMaterial({
     color: 0x000000,
     transparent: true,
@@ -411,115 +504,184 @@ export function createNewbornModel(
   root.add(contactShadow);
   disposables.push(shadowGeo, shadowMat);
 
-  // Pernas alongadas e articuladas (coxa + canela inclinada)
-  const thighGeo = new THREE.CylinderGeometry(0.078, 0.056, 0.54, 10);
-  const shinGeo = new THREE.CylinderGeometry(0.054, 0.036, 0.56, 10);
+  // Pernas digitígradas (coxa + joelho protuberante + canela inclinada + metatarso + garras) mescladas por material
+  const thighBase = new THREE.CylinderGeometry(0.084, 0.056, 0.52, 10);
+  const kneeBase = new THREE.SphereGeometry(0.058, 8, 8);
+  const shinBase = new THREE.CylinderGeometry(0.052, 0.032, 0.48, 10);
+  const footBase = new THREE.BoxGeometry(0.095, 0.05, 0.24);
+  const toeClawBase = new THREE.ConeGeometry(0.014, 0.11, 5);
+
+  const legsSinewParts: THREE.BufferGeometry[] = [];
+  const legsSkinParts: THREE.BufferGeometry[] = [];
+  const legsClawParts: THREE.BufferGeometry[] = [];
   for (const side of [-1, 1]) {
-    const thigh = new THREE.Mesh(thighGeo, sinewMat);
-    thigh.position.set(side * 0.13, 0.78, 0.04);
-    thigh.rotation.x = -0.14;
-    const shin = new THREE.Mesh(shinGeo, skinMat);
-    shin.position.set(side * 0.13, 0.28, -0.02);
-    shin.rotation.x = 0.1;
-    root.add(thigh, shin);
+    legsSinewParts.push(
+      placeGeo(thighBase, side * 0.14, 0.82, 0.06, -0.28, 0, side * -0.05),
+      placeGeo(kneeBase, side * 0.14, 0.58, 0.13),
+      placeGeo(footBase, side * 0.14, 0.04, 0.06, 0.08)
+    );
+    legsSkinParts.push(
+      placeGeo(shinBase, side * 0.14, 0.34, -0.01, 0.32)
+    );
+    for (let t = -1; t <= 1; t++) {
+      legsClawParts.push(
+        placeGeo(
+          toeClawBase,
+          side * 0.14 + t * 0.03,
+          0.03,
+          0.19,
+          Math.PI * 0.45
+        )
+      );
+    }
   }
-  disposables.push(thighGeo, shinGeo);
-
-  // Torso curvado orgânico (permite inclinação para frente na caçada)
-  const torsoGroup = new THREE.Group();
-  torsoGroup.position.set(0, 1.02, 0.02);
-
-  const pelvisGeo = new THREE.CylinderGeometry(0.14, 0.11, 0.22, 10);
-  const pelvis = new THREE.Mesh(pelvisGeo, sinewMat);
-  pelvis.position.y = 0.08;
-  torsoGroup.add(pelvis);
-
-  // Coluna vertebral curvada em TubeGeometry + vértebras saltadas
-  const spineCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(0, 0.12, -0.05),
-    new THREE.Vector3(0, 0.45, -0.09),
-    new THREE.Vector3(0, 0.78, 0.02),
-    new THREE.Vector3(0, 0.94, 0.12),
-  ]);
-  const spineTubeGeo = new THREE.TubeGeometry(spineCurve, 12, 0.048, 8, false);
-  const spineTube = new THREE.Mesh(spineTubeGeo, sinewMat);
-  torsoGroup.add(spineTube);
-
-  const ribCageGeo = new THREE.SphereGeometry(0.185, 14, 12);
-  const ribCage = new THREE.Mesh(ribCageGeo, skinMat);
-  ribCage.scale.set(1.02, 1.65, 0.72);
-  ribCage.position.set(0, 0.48, 0.02);
-  ribCage.rotation.x = 0.2;
-  ribCage.castShadow = true;
-  torsoGroup.add(ribCage);
-
-  const ribGeo = new THREE.TorusGeometry(0.175, 0.017, 6, 12);
-  for (let r = 0; r < 5; r++) {
-    const rib = new THREE.Mesh(ribGeo, sinewMat);
-    rib.rotation.x = Math.PI / 2 + 0.16;
-    rib.scale.set(1.16, 0.72, 1);
-    rib.position.set(0, 0.28 + r * 0.1, 0.02 + r * 0.01);
-    torsoGroup.add(rib);
-  }
-
-  const spineKnobGeo = new THREE.SphereGeometry(0.032, 8, 8);
-  for (let v = 0; v < 6; v++) {
-    const knob = new THREE.Mesh(spineKnobGeo, sinewMat);
-    knob.position.set(0, 0.2 + v * 0.13, -0.11 + (v > 3 ? 0.05 : 0));
-    torsoGroup.add(knob);
-  }
-
-  // Clavículas e ombros ossudos deslocados para frente
-  const shoulderGeo = new THREE.BoxGeometry(0.64, 0.09, 0.19);
-  const shoulders = new THREE.Mesh(shoulderGeo, sinewMat);
-  shoulders.position.set(0, 0.82, 0.08);
-  torsoGroup.add(shoulders);
-
-  const clavicleGeo = new THREE.CylinderGeometry(0.022, 0.018, 0.28, 6);
-  for (const side of [-1, 1]) {
-    const clav = new THREE.Mesh(clavicleGeo, teethMat);
-    clav.rotation.z = side * 1.25;
-    clav.rotation.y = side * -0.25;
-    clav.position.set(side * 0.17, 0.85, 0.15);
-    torsoGroup.add(clav);
-  }
-  disposables.push(clavicleGeo);
-
-  disposables.push(
-    pelvisGeo,
-    spineTubeGeo,
-    ribCageGeo,
-    ribGeo,
-    spineKnobGeo,
-    shoulderGeo
+  const legsSinewGeo = mergeNormalizedGeometries(legsSinewParts);
+  const legsSkinGeo = mergeNormalizedGeometries(legsSkinParts);
+  const legsClawGeo = mergeNormalizedGeometries(legsClawParts);
+  root.add(
+    new THREE.Mesh(legsSinewGeo, sinewMat),
+    new THREE.Mesh(legsSkinGeo, skinMat),
+    new THREE.Mesh(legsClawGeo, clawBloodMat)
   );
+  thighBase.dispose();
+  kneeBase.dispose();
+  shinBase.dispose();
+  footBase.dispose();
+  toeClawBase.dispose();
+  disposables.push(legsSinewGeo, legsSkinGeo, legsClawGeo);
 
-  // Braços compridos de duas articulações (braço + antebraço + garras ensanguentadas)
-  const upperArmGeo = new THREE.CylinderGeometry(0.046, 0.035, 0.48, 10);
-  const forearmGeo = new THREE.CylinderGeometry(0.034, 0.024, 0.52, 10);
-  const clawGeo = new THREE.ConeGeometry(0.022, 0.22, 6);
+  // Torso escultural em LatheGeometry + costelas arqueadas + espinha saliente + escápulas
+  const torsoGroup = new THREE.Group();
+  torsoGroup.position.set(0, 1.0, 0.02);
+
+  const torsoLathePoints = [
+    new THREE.Vector2(0.08, 0.0),
+    new THREE.Vector2(0.14, 0.12), // pelve estreita
+    new THREE.Vector2(0.11, 0.3), // cintura esquelética
+    new THREE.Vector2(0.175, 0.54), // caixa torácica expandida
+    new THREE.Vector2(0.21, 0.74), // peito largo curvado
+    new THREE.Vector2(0.15, 0.88), // ombros
+    new THREE.Vector2(0.08, 0.96), // base do pescoço
+  ];
+  const torsoHullRaw = new THREE.LatheGeometry(torsoLathePoints, 14);
+  const torsoHullPlaced = placeGeo(torsoHullRaw, 0, 0.02, 0.02, 0.14, 0, 0, 1.05, 1.0, 0.72);
+  const scapulaBase = new THREE.BoxGeometry(0.14, 0.22, 0.06);
+  const torsoSkinGeo = mergeNormalizedGeometries([
+    torsoHullPlaced,
+    placeGeo(scapulaBase, -0.15, 0.74, -0.07, 0.22, -0.25, 0.15),
+    placeGeo(scapulaBase, 0.15, 0.74, -0.07, 0.22, 0.25, -0.15),
+  ]);
+  const torsoSkinMesh = new THREE.Mesh(torsoSkinGeo, skinMat);
+  torsoSkinMesh.castShadow = true;
+  torsoGroup.add(torsoSkinMesh);
+  torsoHullRaw.dispose();
+  scapulaBase.dispose();
+
+  const spineCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0.06, -0.05),
+    new THREE.Vector3(0, 0.36, -0.11),
+    new THREE.Vector3(0, 0.68, -0.02),
+    new THREE.Vector3(0, 0.92, 0.11),
+  ]);
+  const spineTubeBase = new THREE.TubeGeometry(spineCurve, 12, 0.044, 8, false);
+  const ribArchBase = new THREE.TorusGeometry(0.168, 0.015, 6, 12);
+  const spineSpikeBase = new THREE.ConeGeometry(0.024, 0.095, 5);
+  const shoulderCapBase = new THREE.SphereGeometry(0.09, 8, 8);
+  const neckBase = new THREE.CylinderGeometry(0.072, 0.092, 0.22, 10);
+
+  const torsoSinewParts: THREE.BufferGeometry[] = [
+    spineTubeBase,
+    placeGeo(neckBase, 0, 0.92, 0.14, 0.45),
+    placeGeo(shoulderCapBase, -0.3, 0.8, 0.07),
+    placeGeo(shoulderCapBase, 0.3, 0.8, 0.07),
+  ];
+  for (let r = 0; r < 6; r++) {
+    const scaleR = 0.84 + r * 0.065;
+    torsoSinewParts.push(
+      placeGeo(
+        ribArchBase,
+        0,
+        0.34 + r * 0.08,
+        0.02 + r * 0.014,
+        Math.PI / 2 + 0.18,
+        0,
+        0,
+        scaleR * 1.15,
+        scaleR * 0.72,
+        1
+      )
+    );
+  }
+  for (let v = 0; v < 7; v++) {
+    const t = v / 6;
+    const pt = spineCurve.getPoint(t);
+    torsoSinewParts.push(
+      placeGeo(spineSpikeBase, pt.x, pt.y + 0.01, pt.z - 0.055, -Math.PI * 0.42)
+    );
+  }
+  const torsoSinewGeo = mergeNormalizedGeometries(torsoSinewParts);
+  torsoGroup.add(new THREE.Mesh(torsoSinewGeo, sinewMat));
+
+  const clavicleBase = new THREE.CylinderGeometry(0.02, 0.016, 0.3, 6);
+  const torsoBoneGeo = mergeNormalizedGeometries([
+    placeGeo(clavicleBase, -0.17, 0.84, 0.15, 0, 0.24, -1.24),
+    placeGeo(clavicleBase, 0.17, 0.84, 0.15, 0, -0.24, 1.24),
+  ]);
+  torsoGroup.add(new THREE.Mesh(torsoBoneGeo, teethMat));
+
+  ribArchBase.dispose();
+  spineSpikeBase.dispose();
+  shoulderCapBase.dispose();
+  neckBase.dispose();
+  clavicleBase.dispose();
+  disposables.push(torsoSkinGeo, torsoSinewGeo, torsoBoneGeo);
+
+  // Braços articulados compridos com cotovelo ossudo e 4 garras longas por mão
+  const upperArmBase = new THREE.CylinderGeometry(0.048, 0.034, 0.48, 10);
+  const forearmBase = new THREE.CylinderGeometry(0.034, 0.023, 0.54, 10);
+  const elbowSpurBase = new THREE.ConeGeometry(0.022, 0.09, 5);
+  const palmBase = new THREE.BoxGeometry(0.075, 0.085, 0.045);
+  const clawBase = new THREE.ConeGeometry(0.018, 0.23, 6);
+
+  const upperArmGeo = placeGeo(upperArmBase, 0, -0.23, 0);
+  const forearmParts: THREE.BufferGeometry[] = [
+    placeGeo(elbowSpurBase, 0, -0.02, -0.04, -Math.PI * 0.68),
+    placeGeo(forearmBase, 0, -0.26, 0),
+    placeGeo(palmBase, 0, -0.53, 0.015),
+  ];
+  const forearmMergedGeo = mergeNormalizedGeometries(forearmParts);
+  const handClawsParts: THREE.BufferGeometry[] = [];
+  for (let f = -1.5; f <= 1.5; f += 1) {
+    handClawsParts.push(
+      placeGeo(
+        clawBase,
+        f * 0.022,
+        -0.63,
+        0.035 + (Math.abs(f) < 1 ? 0.01 : 0),
+        Math.PI - 0.28,
+        0,
+        f * 0.08
+      )
+    );
+  }
+  const handClawsGeo = mergeNormalizedGeometries(handClawsParts);
+  upperArmBase.dispose();
+  forearmBase.dispose();
+  elbowSpurBase.dispose();
+  palmBase.dispose();
+  clawBase.dispose();
 
   const buildArticulatedArm = (xPos: number) => {
     const shoulderGrp = new THREE.Group();
     shoulderGrp.position.set(xPos, 0.8, 0.08);
-
-    const upper = new THREE.Mesh(upperArmGeo, skinMat);
-    upper.position.y = -0.23;
-    shoulderGrp.add(upper);
+    shoulderGrp.add(new THREE.Mesh(upperArmGeo, skinMat));
 
     const forearmGrp = new THREE.Group();
     forearmGrp.position.set(0, -0.46, 0);
-    const fore = new THREE.Mesh(forearmGeo, sinewMat);
-    fore.position.y = -0.25;
-    forearmGrp.add(fore);
-
-    for (let f = -1; f <= 1; f++) {
-      const claw = new THREE.Mesh(clawGeo, clawBloodMat);
-      claw.position.set(f * 0.024, -0.58, 0.03);
-      claw.rotation.x = Math.PI - 0.22;
-      forearmGrp.add(claw);
-    }
-
+    forearmGrp.add(
+      new THREE.Mesh(forearmMergedGeo, sinewMat),
+      new THREE.Mesh(handClawsGeo, clawBloodMat)
+    );
     shoulderGrp.add(forearmGrp);
     return { shoulderGrp, forearmGrp };
   };
@@ -527,89 +689,142 @@ export function createNewbornModel(
   const leftBuilt = buildArticulatedArm(-0.34);
   const rightBuilt = buildArticulatedArm(0.34);
   torsoGroup.add(leftBuilt.shoulderGrp, rightBuilt.shoulderGrp);
-  disposables.push(upperArmGeo, forearmGeo, clawGeo);
+  disposables.push(upperArmGeo, forearmMergedGeo, handClawsGeo);
 
-  // Crânio humanoide alongado, encurvado para frente com órbitas fundas e boca rasgada
+  // Crânio esculpido com arcada supraciliar, maçãs do rosto, órbitas profundas e boca rasgada
   const head = new THREE.Group();
   head.position.set(0, 1.03, 0.22);
 
-  const craniumGeo = new THREE.SphereGeometry(0.185, 18, 16);
+  const craniumBase = new THREE.SphereGeometry(0.18, 16, 14);
+  const cheekBase = new THREE.BoxGeometry(0.065, 0.05, 0.14);
+  const craniumGeo = mergeNormalizedGeometries([
+    placeGeo(craniumBase, 0, 0.02, -0.01, -0.1, 0, 0, 0.78, 1.24, 1.08),
+    placeGeo(cheekBase, -0.092, -0.01, 0.08, 0.15, 0.22, 0),
+    placeGeo(cheekBase, 0.092, -0.01, 0.08, 0.15, -0.22, 0),
+  ]);
   const cranium = new THREE.Mesh(craniumGeo, skinMat);
-  cranium.scale.set(0.78, 1.28, 1.06);
   cranium.castShadow = true;
   head.add(cranium);
 
-  // Arcada supraciliar saliente sobre órbitas fundas
-  const browGeo = new THREE.BoxGeometry(0.24, 0.042, 0.12);
-  const brow = new THREE.Mesh(browGeo, sinewMat);
-  brow.position.set(0, 0.1, 0.13);
-  head.add(brow);
-  disposables.push(browGeo);
+  const browBase = new THREE.BoxGeometry(0.22, 0.04, 0.12);
+  const crestBase = new THREE.BoxGeometry(0.036, 0.05, 0.22);
+  const skullRidgesGeo = mergeNormalizedGeometries([
+    placeGeo(browBase, 0, 0.098, 0.125, 0.18),
+    placeGeo(crestBase, 0, 0.2, -0.02, -0.15),
+  ]);
+  head.add(new THREE.Mesh(skullRidgesGeo, sinewMat));
 
-  const mawGeo = new THREE.SphereGeometry(0.095, 10, 10);
-  const mawCavity = new THREE.Mesh(mawGeo, clawBloodMat);
-  mawCavity.scale.set(0.85, 0.95, 0.65);
-  mawCavity.position.set(0, -0.075, 0.135);
+  const mawBase = new THREE.SphereGeometry(0.095, 10, 10);
+  const mawCavity = new THREE.Mesh(
+    placeGeo(mawBase, 0, -0.078, 0.132, 0, 0, 0, 0.88, 0.95, 0.62),
+    clawBloodMat
+  );
   head.add(mawCavity);
 
-  const socketGeo = new THREE.SphereGeometry(0.056, 10, 10);
-  const eyeGeo = new THREE.SphereGeometry(0.019, 10, 10);
-  const pupilGeo = new THREE.BoxGeometry(0.006, 0.026, 0.014);
-  for (const side of [-1, 1]) {
-    const socket = new THREE.Mesh(socketGeo, socketMat);
-    socket.scale.set(0.95, 1.32, 0.52);
-    socket.position.set(side * 0.068, 0.048, 0.155);
-    const eye = new THREE.Mesh(eyeGeo, eyeGlowMat);
-    eye.position.set(side * 0.068, 0.048, 0.178);
-    const pupil = new THREE.Mesh(pupilGeo, pupilMat);
-    pupil.position.set(side * 0.068, 0.048, 0.194);
-    head.add(socket, eye, pupil);
-  }
-  disposables.push(craniumGeo, mawGeo, socketGeo, eyeGeo, pupilGeo);
+  const socketBase = new THREE.SphereGeometry(0.056, 10, 10);
+  const eyeBase = new THREE.SphereGeometry(0.019, 10, 10);
+  const pupilBase = new THREE.BoxGeometry(0.006, 0.026, 0.014);
+  const socketGeo = mergeNormalizedGeometries([
+    placeGeo(socketBase, -0.066, 0.048, 0.152, 0, 0, 0, 0.92, 1.32, 0.52),
+    placeGeo(socketBase, 0.066, 0.048, 0.152, 0, 0, 0, 0.92, 1.32, 0.52),
+  ]);
+  const eyesGeo = mergeNormalizedGeometries([
+    placeGeo(eyeBase, -0.066, 0.048, 0.175),
+    placeGeo(eyeBase, 0.066, 0.048, 0.175),
+  ]);
+  const pupilsGeo = mergeNormalizedGeometries([
+    placeGeo(pupilBase, -0.066, 0.048, 0.191),
+    placeGeo(pupilBase, 0.066, 0.048, 0.191),
+  ]);
+  head.add(
+    new THREE.Mesh(socketGeo, socketMat),
+    new THREE.Mesh(eyesGeo, eyeGlowMat),
+    new THREE.Mesh(pupilsGeo, pupilMat)
+  );
 
-  // Veias neurais pulsantes pelo rosto e pescoço
-  const veinGeo = new THREE.TubeGeometry(
+  // Veias neurais pulsantes simétricas no rosto
+  const veinLeftRaw = new THREE.TubeGeometry(
     new THREE.CatmullRomCurve3([
-      new THREE.Vector3(-0.09, -0.14, 0.12),
-      new THREE.Vector3(-0.14, 0.01, 0.13),
-      new THREE.Vector3(-0.1, 0.14, 0.06),
+      new THREE.Vector3(-0.085, -0.14, 0.12),
+      new THREE.Vector3(-0.135, 0.01, 0.125),
+      new THREE.Vector3(-0.095, 0.14, 0.05),
     ]),
-    10,
+    8,
     0.0085,
     6,
     false
   );
-  const leftVein = new THREE.Mesh(veinGeo, veinsMat);
-  const rightVein = new THREE.Mesh(veinGeo, veinsMat);
-  rightVein.scale.x = -1;
-  head.add(leftVein, rightVein);
-  disposables.push(veinGeo);
+  const veinRightRaw = new THREE.TubeGeometry(
+    new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0.085, -0.14, 0.12),
+      new THREE.Vector3(0.135, 0.01, 0.125),
+      new THREE.Vector3(0.095, 0.14, 0.05),
+    ]),
+    8,
+    0.0085,
+    6,
+    false
+  );
+  const veinsGeo = mergeNormalizedGeometries([veinLeftRaw, veinRightRaw]);
+  head.add(new THREE.Mesh(veinsGeo, veinsMat));
 
-  // Mandíbula articulada serrilhada
+  // Dentes superiores + Mandíbula articulada serrilhada (sem cubo simples)
+  const toothBase = new THREE.ConeGeometry(0.0095, 0.044, 5);
+  const topTeethParts: THREE.BufferGeometry[] = [];
+  const lowTeethParts: THREE.BufferGeometry[] = [];
+  for (let t = -3; t <= 3; t++) {
+    const curveZ = Math.cos(t * 0.35) * 0.025;
+    topTeethParts.push(
+      placeGeo(toothBase, t * 0.021, -0.082, 0.128 + curveZ, Math.PI - 0.12)
+    );
+    lowTeethParts.push(
+      placeGeo(toothBase, t * 0.02, 0.018, 0.088 + curveZ, 0.12)
+    );
+  }
+  const topTeethGeo = mergeNormalizedGeometries(topTeethParts);
+  head.add(new THREE.Mesh(topTeethGeo, teethMat));
+
   const jaw = new THREE.Group();
   jaw.position.set(0, -0.1, 0.07);
-  const jawBlockGeo = new THREE.BoxGeometry(0.13, 0.06, 0.15);
-  const jawBlock = new THREE.Mesh(jawBlockGeo, sinewMat);
-  jawBlock.position.set(0, -0.025, 0.04);
-  jaw.add(jawBlock);
-
-  const toothGeo = new THREE.ConeGeometry(0.01, 0.042, 5);
-  for (let t = -2; t <= 2; t++) {
-    const lowTooth = new THREE.Mesh(toothGeo, teethMat);
-    lowTooth.position.set(t * 0.024, 0.02, 0.098);
-    jaw.add(lowTooth);
-    const topTooth = new THREE.Mesh(toothGeo, teethMat);
-    topTooth.rotation.x = Math.PI;
-    topTooth.position.set(t * 0.024, -0.078, 0.148);
-    head.add(topTooth);
-  }
+  const jawRamus = new THREE.BoxGeometry(0.036, 0.052, 0.14);
+  const jawChin = new THREE.CylinderGeometry(0.055, 0.042, 0.052, 8);
+  const jawGeo = mergeNormalizedGeometries([
+    placeGeo(jawRamus, -0.05, -0.02, 0.025, 0.12, -0.16),
+    placeGeo(jawRamus, 0.05, -0.02, 0.025, 0.12, 0.16),
+    placeGeo(jawChin, 0, -0.028, 0.092, 0.18, 0, 0, 1.05, 1, 0.72),
+  ]);
+  const lowTeethGeo = mergeNormalizedGeometries(lowTeethParts);
+  jaw.add(new THREE.Mesh(jawGeo, sinewMat), new THREE.Mesh(lowTeethGeo, teethMat));
   head.add(jaw);
-  disposables.push(jawBlockGeo, toothGeo);
+
+  craniumBase.dispose();
+  cheekBase.dispose();
+  browBase.dispose();
+  crestBase.dispose();
+  mawBase.dispose();
+  socketBase.dispose();
+  eyeBase.dispose();
+  pupilBase.dispose();
+  toothBase.dispose();
+  jawRamus.dispose();
+  jawChin.dispose();
+
+  disposables.push(
+    craniumGeo,
+    skullRidgesGeo,
+    mawCavity.geometry,
+    socketGeo,
+    eyesGeo,
+    pupilsGeo,
+    veinsGeo,
+    topTeethGeo,
+    jawGeo,
+    lowTeethGeo
+  );
 
   torsoGroup.add(head);
   root.add(torsoGroup);
 
-  // Hook assíncrono preparado para substituir por modelo `.glb` rigado real quando hospedado
   void loadGlbModelOrFallback("newborn_rig", null).then((glbScene) => {
     if (glbScene) {
       glbScene.visible = true;
@@ -644,7 +859,7 @@ export function buildChapterScene(
   const particleDensity = options.particleDensity ?? (isSoftwareGl ? 0.5 : 1.0);
   const shadowsEnabled = options.shadowsEnabled ?? !isSoftwareGl;
   const maxAniso = Math.min(4, renderer.capabilities.getMaxAnisotropy());
-  const CEIL_H = PHYSICS_PARAMS.ceilingHeight; // 2.85m claustrofóbico
+  const CEIL_H = PHYSICS_PARAMS.ceilingHeight;
 
   const bgByTheme: Record<ChapterConfig["palette"], number> = {
     medical: 0x080608,
@@ -666,7 +881,7 @@ export function buildChapterScene(
         : 0.082
   );
 
-  // Iluminação visível e realista (nunca breu absoluto em telas mobile/Mali)
+  // Iluminação visível e realista (compatível ARM Mali)
   const ambientLight = new THREE.AmbientLight(0xa3b3c9, 0.18);
   scene.add(ambientLight);
 
@@ -704,7 +919,7 @@ export function buildChapterScene(
 
   configureAssetLoaders(renderer);
 
-  // Giroflex / Farol temático do capítulo + cone volumétrico atmosférico no teto
+  // Giroflex / Farol temático do capítulo
   const beaconColorMap: Record<ChapterConfig["palette"], number> = {
     medical: 0xdc2626,
     atrium: 0x0284c7,
@@ -743,7 +958,6 @@ export function buildChapterScene(
   scene.add(beaconCone);
   disposables.push(beaconGeo, beaconMat, beaconConeGeo, beaconConeMat);
 
-  // Fluorescente piscando no setor norte + Cabo elétrico soltando faíscas
   const flickerLight = new THREE.PointLight(0xbae6fd, 1.15, 10.5, 1.75);
   flickerLight.position.set(0, CEIL_H - 0.25, 10.6);
   scene.add(flickerLight);
@@ -760,7 +974,7 @@ export function buildChapterScene(
   scene.add(sparkMesh);
   disposables.push(sparkGeo, sparkMat);
 
-  // Texturas PBR em cache compartilhado (albedo + normal + roughness)
+  // Chão PBR
   const floorTex = buildFloorTileTexture(maxAniso, texSize);
   const wallTex = buildWallPanelTexture(maxAniso, chapter.palette, texSize);
   const grimyGlassTex = buildGrimyGlassTexture();
@@ -782,8 +996,8 @@ export function buildChapterScene(
   scene.add(floor);
   disposables.push(floorGeo, floorMat);
 
-  // Poças escuras de sangue coagulado / fluido químico no chão (sem reflexo cinza artificial)
-  const puddleGeo = new THREE.CircleGeometry(1, 14);
+  // Poças mescladas (1 draw call para sangue, 1 draw call para água/químico)
+  const puddleBase = new THREE.CircleGeometry(1, 14);
   const bloodPuddleMat = new THREE.MeshStandardMaterial({
     color: 0x1c0103,
     emissive: 0x060000,
@@ -803,21 +1017,38 @@ export function buildChapterScene(
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -1,
   });
-  disposables.push(puddleGeo, bloodPuddleMat, waterPuddleMat);
-
+  const bloodPuddleParts: THREE.BufferGeometry[] = [];
+  const waterPuddleParts: THREE.BufferGeometry[] = [];
   for (const p of chapter.puddles) {
-    const pm = new THREE.Mesh(
-      puddleGeo,
-      p.isBlood ? bloodPuddleMat : waterPuddleMat
+    const pg = placeGeo(
+      puddleBase,
+      p.x,
+      0.012,
+      p.z,
+      -Math.PI / 2,
+      0,
+      p.x * 0.7,
+      p.r,
+      p.r * 0.65,
+      1
     );
-    pm.rotation.x = -Math.PI / 2;
-    pm.rotation.z = p.x * 0.7;
-    pm.scale.set(p.r, p.r * 0.65, 1);
-    pm.position.set(p.x, 0.012, p.z);
-    scene.add(pm);
+    if (p.isBlood) bloodPuddleParts.push(pg);
+    else waterPuddleParts.push(pg);
   }
+  if (bloodPuddleParts.length > 0) {
+    const bloodMerged = mergeNormalizedGeometries(bloodPuddleParts);
+    scene.add(new THREE.Mesh(bloodMerged, bloodPuddleMat));
+    disposables.push(bloodMerged);
+  }
+  if (waterPuddleParts.length > 0) {
+    const waterMerged = mergeNormalizedGeometries(waterPuddleParts);
+    scene.add(new THREE.Mesh(waterMerged, waterPuddleMat));
+    disposables.push(waterMerged);
+  }
+  puddleBase.dispose();
+  disposables.push(bloodPuddleMat, waterPuddleMat);
 
-  // Teto escuro baixo (2.85m) com grades PBR + vigas estruturais + tubulações longitudinais em InstancedMesh
+  // Teto + vigas + tubulações + flanges + grade de ventilação real
   const ceilTex = buildCeilingGrateTexture(maxAniso, texSize);
   const ceilingGeo = new THREE.PlaneGeometry(21, 21);
   const ceilingMat = new THREE.MeshStandardMaterial({
@@ -835,7 +1066,6 @@ export function buildChapterScene(
   scene.add(ceiling);
   disposables.push(ceilingGeo, ceilingMat);
 
-  // Vigas transversais no teto + tubulações de conduíte industrial + faixas LED emissivas sem custo de luz dinâmica
   const beamGeo = new THREE.BoxGeometry(19.0, 0.16, 0.24);
   const beamMat = new THREE.MeshStandardMaterial({
     color: 0x1a222d,
@@ -873,12 +1103,12 @@ export function buildChapterScene(
   scene.add(ledInst);
   disposables.push(ledStripGeo, ledStripMat);
 
-  // Tubulações industriais paralelas ao corredor
+  // Tubulações industriais + Flanges em InstancedMesh
   const pipeGeo = new THREE.CylinderGeometry(0.055, 0.055, 19.5, 10);
   pipeGeo.rotateX(Math.PI / 2);
   const pipeMat = new THREE.MeshStandardMaterial({
     color: chapter.palette === "engineering" ? 0x5c3420 : 0x2f2824,
-    roughness: 0.62,
+    roughness: 0.58,
     metalness: 0.42,
   });
   const pipeOffsets = [-1.18, -1.02, 1.05, 1.2];
@@ -892,12 +1122,43 @@ export function buildChapterScene(
   pipesInst.computeBoundingSphere();
   scene.add(pipesInst);
 
-  // Escotilha escura de ventilação onde o Newborn cai (Z = 8.2)
-  const ventGeo = new THREE.BoxGeometry(1.15, 0.08, 1.15);
-  const ventHatch = new THREE.Mesh(ventGeo, beamMat);
-  ventHatch.position.set(0, CEIL_H - 0.04, 8.2);
-  scene.add(ventHatch);
-  disposables.push(pipeGeo, pipeMat, ventGeo);
+  const flangeGeo = new THREE.CylinderGeometry(0.085, 0.085, 0.05, 10);
+  flangeGeo.rotateX(Math.PI / 2);
+  const flangeZs = [-3.0, 1.0, 5.0, 9.0, 12.5];
+  const flangesInst = new THREE.InstancedMesh(
+    flangeGeo,
+    beamMat,
+    pipeOffsets.length * flangeZs.length
+  );
+  let fIdx = 0;
+  for (const px of pipeOffsets) {
+    for (const fz of flangeZs) {
+      dummy.position.set(px, CEIL_H - 0.21, fz);
+      dummy.updateMatrix();
+      flangesInst.setMatrixAt(fIdx++, dummy.matrix);
+    }
+  }
+  flangesInst.instanceMatrix.needsUpdate = true;
+  scene.add(flangesInst);
+  disposables.push(pipeGeo, pipeMat, flangeGeo);
+
+  // Escotilha de ventilação com moldura e aletas metálicas onde o Newborn cai (Z = 8.2)
+  const ventRimBase = new THREE.BoxGeometry(1.24, 0.09, 0.1);
+  const ventBarBase = new THREE.BoxGeometry(1.06, 0.04, 0.045);
+  const ventParts: THREE.BufferGeometry[] = [
+    placeGeo(ventRimBase, 0, CEIL_H - 0.045, 8.2 - 0.57),
+    placeGeo(ventRimBase, 0, CEIL_H - 0.045, 8.2 + 0.57),
+    placeGeo(ventRimBase, -0.57, CEIL_H - 0.045, 8.2, 0, Math.PI / 2),
+    placeGeo(ventRimBase, 0.57, CEIL_H - 0.045, 8.2, 0, Math.PI / 2),
+  ];
+  for (let s = -2; s <= 2; s++) {
+    ventParts.push(placeGeo(ventBarBase, 0, CEIL_H - 0.05, 8.2 + s * 0.2, 0.35));
+  }
+  const ventGeo = mergeNormalizedGeometries(ventParts);
+  scene.add(new THREE.Mesh(ventGeo, beamMat));
+  ventRimBase.dispose();
+  ventBarBase.dispose();
+  disposables.push(ventGeo);
 
   // Cabo elétrico rompido pendurado soltando faíscas
   const cableGeo = new THREE.TubeGeometry(
@@ -911,11 +1172,10 @@ export function buildChapterScene(
     6,
     false
   );
-  const cableMesh = new THREE.Mesh(cableGeo, beamMat);
-  scene.add(cableMesh);
+  scene.add(new THREE.Mesh(cableGeo, beamMat));
   disposables.push(cableGeo);
 
-  // Pilastras modulares PBR em InstancedMesh (relevo 3D ao longo dos corredores)
+  // Pilastras modulares PBR em InstancedMesh
   const pillarGeo = new THREE.BoxGeometry(0.24, CEIL_H, 0.24);
   const pillarMat = new THREE.MeshStandardMaterial({
     color: 0x1f2734,
@@ -952,7 +1212,7 @@ export function buildChapterScene(
   scene.add(pillarsInst);
   disposables.push(pillarGeo, pillarMat);
 
-  // Materiais modulares PBR de parede (com vertexColors para Vertex AO), vidro sujo em MeshStandardMaterial e mobília
+  // Materiais estruturais compartilhados
   const wallMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
     vertexColors: true,
@@ -966,7 +1226,7 @@ export function buildChapterScene(
   const glassMat = new THREE.MeshStandardMaterial({
     color: chapter.palette === "biolab" ? 0x6ee7b7 : 0x94a3b8,
     map: grimyGlassTex,
-    roughness: 0.3,
+    roughness: 0.28,
     metalness: 0.08,
     transparent: true,
     opacity: 0.42,
@@ -974,17 +1234,44 @@ export function buildChapterScene(
   });
   const deskMat = new THREE.MeshStandardMaterial({
     color: 0x161c26,
-    roughness: 0.72,
-    metalness: 0.25,
+    roughness: 0.7,
+    metalness: 0.26,
+  });
+  const trimSteelMat = new THREE.MeshStandardMaterial({
+    color: 0x252f3d,
+    roughness: 0.52,
+    metalness: 0.4,
   });
   const rustTrimMat = new THREE.MeshStandardMaterial({
     color: 0x452b1e,
     roughness: 0.85,
     metalness: 0.28,
   });
-  disposables.push(wallMat, glassMat, deskMat, rustTrimMat);
+  const paperMat = new THREE.MeshStandardMaterial({
+    color: 0x434c59,
+    roughness: 0.95,
+    metalness: 0.02,
+  });
+  disposables.push(
+    wallMat,
+    glassMat,
+    deskMat,
+    trimSteelMat,
+    rustTrimMat,
+    paperMat
+  );
+
+  // Acumuladores de geometria estática para reduzir drasticamente draw calls
+  const wallGeos: THREE.BufferGeometry[] = [];
+  const trimGeos: THREE.BufferGeometry[] = [];
+  const deskGeos: THREE.BufferGeometry[] = [];
+  const glassGeos: THREE.BufferGeometry[] = [];
+  const paperGeos: THREE.BufferGeometry[] = [];
+  const rustGeos: THREE.BufferGeometry[] = [];
 
   let coreLight: THREE.PointLight | undefined;
+  const tankCoreGeos: THREE.BufferGeometry[] = [];
+  let hasIntactTank = false;
 
   for (const w of chapter.walls) {
     const sx = w.maxX - w.minX;
@@ -994,140 +1281,387 @@ export function buildChapterScene(
     const cz = (w.minZ + w.maxZ) * 0.5;
 
     if (w.kind === "tank") {
-      // Bio-Tanque de Contenção Verde Tóxico (Cap. 4)
-      const baseGeo = new THREE.CylinderGeometry(0.76, 0.84, 0.38, 16);
-      const capGeo = new THREE.CylinderGeometry(0.76, 0.76, 0.35, 16);
-      const tubeGeo = new THREE.CylinderGeometry(0.66, 0.66, 2.1, 16);
-      const coreGeo = new THREE.CylinderGeometry(0.24, 0.18, 1.5, 10);
-      const toxicMat = new THREE.MeshStandardMaterial({
-        color: 0x22c55e,
-        emissive: 0x15803d,
-        emissiveIntensity: w.id === "bio-tank-sw" ? 0.18 : 1.05,
-        roughness: 0.25,
-      });
-      const baseM = new THREE.Mesh(baseGeo, deskMat);
-      baseM.position.set(cx, 0.19, cz);
-      const capM = new THREE.Mesh(capGeo, deskMat);
-      capM.position.set(cx, CEIL_H - 0.175, cz);
-      const tubeM = new THREE.Mesh(tubeGeo, glassMat);
-      tubeM.position.set(cx, 1.43, cz);
-      const coreM = new THREE.Mesh(coreGeo, toxicMat);
-      coreM.position.set(cx, 1.38, cz);
-      scene.add(baseM, capM, tubeM, coreM);
-      disposables.push(baseGeo, capGeo, tubeGeo, coreGeo, toxicMat);
+      // Bio-Tanque de Contenção detalhado (Cap. 4) com anéis, 4 hastes de aço, tubo de vidro e espécime orgânico
+      const baseGeo = new THREE.CylinderGeometry(0.76, 0.86, 0.36, 16);
+      const ringGeo = new THREE.TorusGeometry(0.78, 0.04, 6, 16);
+      const capGeo = new THREE.CylinderGeometry(0.76, 0.76, 0.34, 16);
+      const strutGeo = new THREE.CylinderGeometry(0.032, 0.032, 2.2, 6);
+      const tubeGeo = new THREE.CylinderGeometry(0.65, 0.65, 2.1, 16);
+      const specimenGeo = new THREE.LatheGeometry(
+        [
+          new THREE.Vector2(0.06, -0.7),
+          new THREE.Vector2(0.24, -0.35),
+          new THREE.Vector2(0.16, 0.0),
+          new THREE.Vector2(0.28, 0.35),
+          new THREE.Vector2(0.14, 0.65),
+          new THREE.Vector2(0.04, 0.8),
+        ],
+        10
+      );
+
+      deskGeos.push(
+        placeGeo(baseGeo, cx, 0.18, cz),
+        placeGeo(capGeo, cx, CEIL_H - 0.17, cz)
+      );
+      trimGeos.push(
+        placeGeo(ringGeo, cx, 0.37, cz, Math.PI / 2),
+        placeGeo(ringGeo, cx, CEIL_H - 0.35, cz, Math.PI / 2)
+      );
+      for (let a = 0; a < 4; a++) {
+        const ang = (a * Math.PI) / 2 + Math.PI / 4;
+        trimGeos.push(
+          placeGeo(
+            strutGeo,
+            cx + Math.cos(ang) * 0.72,
+            1.42,
+            cz + Math.sin(ang) * 0.72
+          )
+        );
+      }
+      glassGeos.push(placeGeo(tubeGeo, cx, 1.43, cz));
+      if (w.id !== "bio-tank-sw") {
+        hasIntactTank = true;
+        tankCoreGeos.push(placeGeo(specimenGeo, cx, 1.38, cz));
+      }
+
+      baseGeo.dispose();
+      ringGeo.dispose();
+      capGeo.dispose();
+      strutGeo.dispose();
+      tubeGeo.dispose();
+      specimenGeo.dispose();
       continue;
     }
 
     if (w.kind === "core") {
-      // Núcleo Azul de Fusão (Cap. 5)
-      const coreBaseGeo = new THREE.BoxGeometry(sx, 0.55, sz);
-      const coreTopGeo = new THREE.BoxGeometry(sx, 0.55, sz);
-      const plasmaGeo = new THREE.CylinderGeometry(1.15, 1.15, 1.75, 18);
+      // Núcleo Azul de Fusão (Cap. 5) com pedestais chanfrados, aletas e anéis magnéticos
+      const coreBaseGeo = new THREE.CylinderGeometry(1.75, 2.05, 0.56, 8);
+      const coreTopGeo = new THREE.CylinderGeometry(2.05, 1.75, 0.54, 8);
+      const finGeo = new THREE.BoxGeometry(0.12, 1.85, 0.32);
+      const ringGeo = new THREE.TorusGeometry(1.42, 0.065, 8, 22);
+      const plasmaGeo = new THREE.CylinderGeometry(1.02, 1.02, 1.85, 18);
       const plasmaMat = new THREE.MeshStandardMaterial({
         color: 0x38bdf8,
         emissive: 0x0284c7,
         emissiveIntensity: 1.65,
         roughness: 0.15,
       });
-      const baseM = new THREE.Mesh(coreBaseGeo, deskMat);
-      baseM.position.set(cx, 0.275, cz);
-      const topM = new THREE.Mesh(coreTopGeo, deskMat);
-      topM.position.set(cx, CEIL_H - 0.275, cz);
-      const plasmaM = new THREE.Mesh(plasmaGeo, plasmaMat);
-      plasmaM.position.set(cx, CEIL_H * 0.5, cz);
+
+      deskGeos.push(
+        placeGeo(coreBaseGeo, cx, 0.28, cz, 0, Math.PI / 8),
+        placeGeo(coreTopGeo, cx, CEIL_H - 0.27, cz, 0, Math.PI / 8)
+      );
+      for (let f = 0; f < 4; f++) {
+        const ang = (f * Math.PI) / 2 + Math.PI / 4;
+        trimGeos.push(
+          placeGeo(
+            finGeo,
+            cx + Math.cos(ang) * 1.55,
+            CEIL_H * 0.5,
+            cz + Math.sin(ang) * 1.55,
+            0,
+            -ang
+          )
+        );
+      }
+      const plasmaParts: THREE.BufferGeometry[] = [
+        placeGeo(plasmaGeo, cx, CEIL_H * 0.5, cz),
+        placeGeo(ringGeo, cx, CEIL_H * 0.5 - 0.42, cz, Math.PI / 2 + 0.12),
+        placeGeo(ringGeo, cx, CEIL_H * 0.5 + 0.42, cz, Math.PI / 2 - 0.12),
+      ];
+      const mergedPlasma = mergeNormalizedGeometries(plasmaParts);
+      scene.add(new THREE.Mesh(mergedPlasma, plasmaMat));
       coreLight = new THREE.PointLight(0x38bdf8, 3.2, 13, 1.9);
       coreLight.position.set(cx, 1.5, cz);
-      scene.add(baseM, topM, plasmaM, coreLight);
-      disposables.push(coreBaseGeo, coreTopGeo, plasmaGeo, plasmaMat);
+      scene.add(coreLight);
+
+      coreBaseGeo.dispose();
+      coreTopGeo.dispose();
+      finGeo.dispose();
+      ringGeo.dispose();
+      plasmaGeo.dispose();
+      disposables.push(mergedPlasma, plasmaMat);
       continue;
     }
 
     if (w.kind === "bunk") {
-      // Beliches/Armários de Alojamento (Cap. 3)
-      const frameGeo = new THREE.BoxGeometry(sx, sy, sz);
-      const frameM = new THREE.Mesh(frameGeo, rustTrimMat);
-      frameM.position.set(cx, sy * 0.5, cz);
+      // Beliches detalhados (Cap. 3): 4 postes, longarinas, escada lateral, colchões e travesseiros
+      const postGeo = new THREE.BoxGeometry(0.08, sy, 0.08);
+      const deckGeo = new THREE.BoxGeometry(sx * 0.94, 0.06, sz * 0.9);
+      const railGeo = new THREE.BoxGeometry(sx * 0.72, 0.04, 0.04);
+      const rungGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.48, 6);
       const mattressGeo = new THREE.BoxGeometry(sx * 0.88, 0.14, sz * 0.82);
-      const mattLower = new THREE.Mesh(mattressGeo, deskMat);
-      mattLower.position.set(cx, 0.52, cz);
-      const mattUpper = new THREE.Mesh(mattressGeo, deskMat);
-      mattUpper.position.set(cx, 1.32, cz);
-      scene.add(frameM, mattLower, mattUpper);
-      disposables.push(frameGeo, mattressGeo);
+      const pillowGeo = new THREE.BoxGeometry(0.32, 0.07, sz * 0.62);
+
+      for (const px of [-sx * 0.45, sx * 0.45]) {
+        for (const pz of [-sz * 0.42, sz * 0.42]) {
+          rustGeos.push(placeGeo(postGeo, cx + px, sy * 0.5, cz + pz));
+        }
+      }
+      rustGeos.push(
+        placeGeo(deckGeo, cx, 0.43, cz),
+        placeGeo(deckGeo, cx, 1.23, cz),
+        placeGeo(railGeo, cx + sx * 0.08, 1.48, cz - sz * 0.43)
+      );
+      for (let r = 0; r < 3; r++) {
+        trimGeos.push(
+          placeGeo(
+            rungGeo,
+            cx - sx * 0.25,
+            0.45 + r * 0.34,
+            cz - sz * 0.45,
+            0,
+            0,
+            Math.PI / 2
+          )
+        );
+      }
+      deskGeos.push(
+        placeGeo(mattressGeo, cx, 0.53, cz),
+        placeGeo(mattressGeo, cx, 1.33, cz)
+      );
+      paperGeos.push(
+        placeGeo(pillowGeo, cx + sx * 0.32, 0.63, cz),
+        placeGeo(pillowGeo, cx + sx * 0.32, 1.43, cz)
+      );
+
+      postGeo.dispose();
+      deckGeo.dispose();
+      railGeo.dispose();
+      rungGeo.dispose();
+      mattressGeo.dispose();
+      pillowGeo.dispose();
       continue;
     }
 
-    const geo = new THREE.BoxGeometry(sx, sy, sz);
-    const isWallMesh = !w.kind || w.kind === "wall";
-    if (isWallMesh) {
-      applyBoxVertexAO(geo, sy);
-    }
-    const mat =
-      w.kind === "glass" ? glassMat : w.kind === "desk" ? deskMat : wallMat;
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.set(cx, sy * 0.5, cz);
-
     if (w.kind === "glass") {
-      mesh.geometry.dispose();
-      const glassGeo = new THREE.BoxGeometry(sx, 1.85, sz * 0.38);
-      mesh.geometry = glassGeo;
-      mesh.position.set(cx, 1.85, cz);
+      const glassGeo = new THREE.BoxGeometry(sx, 1.85, Math.max(0.06, sz * 0.36));
+      glassGeos.push(placeGeo(glassGeo, cx, 1.85, cz));
+      glassGeo.dispose();
+
       const sillGeo = new THREE.BoxGeometry(sx, 0.9, sz);
-      const sill = new THREE.Mesh(sillGeo, deskMat);
-      sill.position.set(cx, 0.45, cz);
-      scene.add(sill);
-      disposables.push(sillGeo);
+      const sillCapGeo = new THREE.BoxGeometry(sx + 0.04, 0.06, sz + 0.06);
+      deskGeos.push(placeGeo(sillGeo, cx, 0.45, cz));
+      trimGeos.push(placeGeo(sillCapGeo, cx, 0.92, cz));
+      sillGeo.dispose();
+      sillCapGeo.dispose();
+
+      // Montantes verticais metálicos nas divisórias de vidro
+      const mullionCount = Math.max(2, Math.round(Math.max(sx, sz) / 0.9));
+      const mulGeo = new THREE.BoxGeometry(0.06, 1.9, 0.08);
+      for (let m = 0; m <= mullionCount; m++) {
+        const t = -0.5 + m / mullionCount;
+        const mx = sx >= sz ? cx + t * (sx - 0.06) : cx;
+        const mz = sz > sx ? cz + t * (sz - 0.06) : cz;
+        trimGeos.push(placeGeo(mulGeo, mx, 1.88, mz));
+      }
+      mulGeo.dispose();
+      continue;
     }
 
     if (w.kind === "desk") {
-      // Balcão / Mesa com tampo chanfrado + prancheta e terminal caído em cima
-      const rimGeo = new THREE.BoxGeometry(sx + 0.08, 0.06, sz + 0.08);
-      const rim = new THREE.Mesh(rimGeo, rustTrimMat);
-      rim.position.set(cx, sy + 0.02, cz);
-      const paperGeo = new THREE.BoxGeometry(0.26, 0.014, 0.34);
-      const paperMat = new THREE.MeshStandardMaterial({
-        color: 0x3b424c,
-        roughness: 0.96,
-        metalness: 0.02,
-      });
-      const paper = new THREE.Mesh(paperGeo, paperMat);
-      paper.position.set(cx - 0.38, sy + 0.055, cz + 0.04);
-      paper.rotation.y = 0.28;
-      scene.add(rim, paper);
-      disposables.push(rimGeo, paperGeo, paperMat);
+      // Balcão / Maca com tampo chanfrado, pés laterais, prancheta e monitor caído
+      const topGeo = new THREE.BoxGeometry(sx, 0.08, sz);
+      const rimGeo = new THREE.BoxGeometry(sx + 0.07, 0.045, sz + 0.07);
+      const panelGeo = new THREE.BoxGeometry(sx * 0.9, sy - 0.08, sz * 0.82);
+      const paperGeo = new THREE.BoxGeometry(0.24, 0.015, 0.32);
+      const termGeo = new THREE.BoxGeometry(0.32, 0.14, 0.22);
+
+      deskGeos.push(
+        placeGeo(panelGeo, cx, (sy - 0.08) * 0.5, cz),
+        placeGeo(topGeo, cx, sy - 0.04, cz)
+      );
+      trimGeos.push(
+        placeGeo(rimGeo, cx, sy + 0.01, cz),
+        placeGeo(termGeo, cx + sx * 0.2, sy + 0.09, cz, 0, -0.34, 0.12)
+      );
+      paperGeos.push(placeGeo(paperGeo, cx - sx * 0.22, sy + 0.04, cz + 0.04, 0, 0.28));
+
+      topGeo.dispose();
+      rimGeo.dispose();
+      panelGeo.dispose();
+      paperGeo.dispose();
+      termGeo.dispose();
+      continue;
     }
 
-    mesh.castShadow = shadowsEnabled && w.kind !== "glass";
-    mesh.receiveShadow = shadowsEnabled;
-    scene.add(mesh);
-    disposables.push(mesh.geometry);
+    // Parede sólida com Vertex AO + rodapé metálico + sanca superior
+    const boxGeo = new THREE.BoxGeometry(sx, sy, sz);
+    applyBoxVertexAO(boxGeo, sy);
+    wallGeos.push(placeGeo(boxGeo, cx, sy * 0.5, cz));
+    boxGeo.dispose();
+
+    if (!w.id.startsWith("outer-") && sy >= 2.2) {
+      const skirtGeo = new THREE.BoxGeometry(sx + 0.03, 0.11, sz + 0.03);
+      trimGeos.push(
+        placeGeo(skirtGeo, cx, 0.055, cz),
+        placeGeo(skirtGeo, cx, CEIL_H - 0.055, cz)
+      );
+      skirtGeo.dispose();
+    }
+
+    // Identidade visual para contêineres do Hangar (Cap. 7) e chicanas Ômega (Cap. 6)
+    if (w.id.startsWith("hng-crate-")) {
+      const ribGeo = new THREE.BoxGeometry(0.08, sy - 0.2, sz + 0.06);
+      for (let rx = w.minX + 0.45; rx <= w.maxX - 0.45; rx += 0.65) {
+        rustGeos.push(placeGeo(ribGeo, rx, sy * 0.5, cz));
+      }
+      ribGeo.dispose();
+    } else if (w.id.startsWith("omg-baffle-")) {
+      const braceGeo = new THREE.BoxGeometry(0.14, sy, sz + 0.12);
+      for (let bx = w.minX + 0.8; bx <= w.maxX - 0.8; bx += 2.1) {
+        trimGeos.push(placeGeo(braceGeo, bx, sy * 0.5, cz));
+      }
+      braceGeo.dispose();
+    }
   }
 
-  // Props visuais de identidade do setor (leves e fora da malha de colisão principal)
+  // Props específicos leves por setor (mesclados nas malhas estáticas para zero draw calls extras)
   if (chapter.palette === "medical") {
-    const trayGeo = new THREE.BoxGeometry(0.6, 0.04, 0.4);
-    const trayMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.4, metalness: 0.35 });
-    const tray = new THREE.Mesh(trayGeo, trayMat);
-    tray.position.set(-5.6, 0.92, -0.35);
-    scene.add(tray);
-    disposables.push(trayGeo, trayMat);
+    // Maca hospitalar + suporte de soro + bandeja inox na Sala de Raio-X/Triagem
+    const bedFrame = new THREE.BoxGeometry(1.85, 0.08, 0.78);
+    const legGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.66, 6);
+    const ivPole = new THREE.CylinderGeometry(0.018, 0.02, 1.85, 6);
+    const trayGeo = new THREE.BoxGeometry(0.55, 0.035, 0.36);
+    trimGeos.push(
+      placeGeo(bedFrame, -5.6, 0.88, -0.35),
+      placeGeo(trayGeo, -5.6, 0.93, -0.35),
+      placeGeo(ivPole, -4.55, 0.925, -0.35),
+      placeGeo(legGeo, -6.4, 0.33, -0.68),
+      placeGeo(legGeo, -4.8, 0.33, -0.68),
+      placeGeo(legGeo, -6.4, 0.33, -0.02),
+      placeGeo(legGeo, -4.8, 0.33, -0.02)
+    );
+    bedFrame.dispose();
+    legGeo.dispose();
+    ivPole.dispose();
+    trayGeo.dispose();
+  } else if (chapter.palette === "atrium") {
+    // Cristais de gelo facetados e dutos criogênicos
+    const crystalGeo = new THREE.ConeGeometry(0.22, 0.85, 5);
+    const crystalMat = new THREE.MeshStandardMaterial({
+      color: 0xbae6fd,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.25,
+      roughness: 0.22,
+      metalness: 0.15,
+    });
+    const crystalMerged = mergeNormalizedGeometries([
+      placeGeo(crystalGeo, -2.5, 0.42, 1.5, 0.2, 0.3, -0.15),
+      placeGeo(crystalGeo, -2.25, 0.28, 1.45, -0.1, 1.1, 0.35, 0.7, 0.65, 0.7),
+      placeGeo(crystalGeo, 2.5, 0.42, 7.1, -0.15, 0.7, 0.2),
+      placeGeo(crystalGeo, -5.4, 0.36, 4.1, 0.2, -0.5, 0.15, 0.8, 0.8, 0.8),
+    ]);
+    scene.add(new THREE.Mesh(crystalMerged, crystalMat));
+    crystalGeo.dispose();
+    disposables.push(crystalMerged, crystalMat);
+  } else if (chapter.palette === "biolab" && hasIntactTank && tankCoreGeos.length > 0) {
+    const toxicMat = new THREE.MeshStandardMaterial({
+      color: 0x22c55e,
+      emissive: 0x15803d,
+      emissiveIntensity: 0.95,
+      roughness: 0.25,
+    });
+    const mergedTankCores = mergeNormalizedGeometries(tankCoreGeos);
+    scene.add(new THREE.Mesh(mergedTankCores, toxicMat));
+    disposables.push(mergedTankCores, toxicMat);
   } else if (chapter.palette === "engineering") {
-    const valveGeo = new THREE.TorusGeometry(0.24, 0.04, 6, 12);
-    const valveMat = new THREE.MeshStandardMaterial({ color: 0xd97706, roughness: 0.45, metalness: 0.3 });
-    const valve = new THREE.Mesh(valveGeo, valveMat);
-    valve.position.set(-2.35, 1.35, 1.4);
-    scene.add(valve);
-    disposables.push(valveGeo, valveMat);
+    const valveGeo = new THREE.TorusGeometry(0.24, 0.038, 6, 12);
+    const spokeGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.44, 6);
+    const stemGeo = new THREE.CylinderGeometry(0.045, 0.055, 0.22, 8);
+    const valveMat = new THREE.MeshStandardMaterial({
+      color: 0xd97706,
+      roughness: 0.45,
+      metalness: 0.3,
+    });
+    const mergedValves = mergeNormalizedGeometries([
+      placeGeo(valveGeo, -5.24, 1.35, 5.2, 0, Math.PI / 2),
+      placeGeo(spokeGeo, -5.24, 1.35, 5.2, Math.PI / 2, 0, 0),
+      placeGeo(spokeGeo, -5.24, 1.35, 5.2, 0, 0, 0),
+      placeGeo(valveGeo, 5.24, 1.35, 7.6, 0, Math.PI / 2),
+      placeGeo(spokeGeo, 5.24, 1.35, 7.6, Math.PI / 2, 0, 0),
+      placeGeo(spokeGeo, 5.24, 1.35, 7.6, 0, 0, 0),
+    ]);
+    trimGeos.push(
+      placeGeo(stemGeo, -5.33, 1.35, 5.2, 0, 0, Math.PI / 2),
+      placeGeo(stemGeo, 5.33, 1.35, 7.6, 0, 0, Math.PI / 2)
+    );
+    scene.add(new THREE.Mesh(mergedValves, valveMat));
+    valveGeo.dispose();
+    spokeGeo.dispose();
+    stemGeo.dispose();
+    disposables.push(mergedValves, valveMat);
+  } else if (chapter.palette === "omega") {
+    const consoleBase = new THREE.BoxGeometry(0.95, 1.05, 0.55);
+    const screenTilt = new THREE.BoxGeometry(0.75, 0.32, 0.08);
+    deskGeos.push(
+      placeGeo(consoleBase, -6.2, 0.525, -0.4),
+      placeGeo(consoleBase, 6.2, 0.525, 10.6)
+    );
+    trimGeos.push(
+      placeGeo(screenTilt, -6.2, 1.15, -0.4, -0.55),
+      placeGeo(screenTilt, 6.2, 1.15, 10.6, -0.55)
+    );
+    consoleBase.dispose();
+    screenTilt.dispose();
   } else if (chapter.palette === "hangar") {
     const crateGeo = new THREE.BoxGeometry(1.1, 0.85, 1.1);
-    const crateMat = new THREE.MeshStandardMaterial({ color: 0x3f2e21, roughness: 0.82, metalness: 0.15 });
-    const crate = new THREE.Mesh(crateGeo, crateMat);
-    crate.position.set(7.6, 0.425, 10.8);
-    scene.add(crate);
-    disposables.push(crateGeo, crateMat);
+    const crateMat = new THREE.MeshStandardMaterial({
+      color: 0x3f2e21,
+      roughness: 0.82,
+      metalness: 0.15,
+    });
+    const mergedCrates = mergeNormalizedGeometries([
+      placeGeo(crateGeo, 7.6, 0.425, 10.8),
+      placeGeo(crateGeo, -7.8, 0.38, 10.9, 0, 0.25, 0, 0.9, 0.9, 0.9),
+      placeGeo(crateGeo, 7.65, 1.2, 10.85, 0, -0.3, 0, 0.65, 0.65, 0.65),
+    ]);
+    scene.add(new THREE.Mesh(mergedCrates, crateMat));
+    crateGeo.dispose();
+    disposables.push(mergedCrates, crateMat);
   }
 
-  // Silhuetas de cadáveres caídos no chão (storytelling ambiental de horror)
+  // Emitir todas as malhas arquitetônicas mescladas (5 draw calls para todo o complexo!)
+  if (wallGeos.length > 0) {
+    const mergedWalls = mergeNormalizedGeometries(wallGeos, true);
+    const wallMesh = new THREE.Mesh(mergedWalls, wallMat);
+    wallMesh.castShadow = shadowsEnabled;
+    wallMesh.receiveShadow = shadowsEnabled;
+    scene.add(wallMesh);
+    disposables.push(mergedWalls);
+  }
+  if (trimGeos.length > 0) {
+    const mergedTrim = mergeNormalizedGeometries(trimGeos);
+    const trimMesh = new THREE.Mesh(mergedTrim, trimSteelMat);
+    trimMesh.receiveShadow = shadowsEnabled;
+    scene.add(trimMesh);
+    disposables.push(mergedTrim);
+  }
+  if (deskGeos.length > 0) {
+    const mergedDesks = mergeNormalizedGeometries(deskGeos);
+    const deskMesh = new THREE.Mesh(mergedDesks, deskMat);
+    deskMesh.castShadow = shadowsEnabled;
+    deskMesh.receiveShadow = shadowsEnabled;
+    scene.add(deskMesh);
+    disposables.push(mergedDesks);
+  }
+  if (rustGeos.length > 0) {
+    const mergedRust = mergeNormalizedGeometries(rustGeos);
+    scene.add(new THREE.Mesh(mergedRust, rustTrimMat));
+    disposables.push(mergedRust);
+  }
+  if (paperGeos.length > 0) {
+    const mergedPapers = mergeNormalizedGeometries(paperGeos);
+    scene.add(new THREE.Mesh(mergedPapers, paperMat));
+    disposables.push(mergedPapers);
+  }
+  if (glassGeos.length > 0) {
+    const mergedGlass = mergeNormalizedGeometries(glassGeos);
+    scene.add(new THREE.Mesh(mergedGlass, glassMat));
+    disposables.push(mergedGlass);
+  }
+
+  // Silhuetas anatômicas de cadáveres mescladas por material (apenas 2 draw calls)
   const corpseCoatMat = new THREE.MeshStandardMaterial({
     color: 0x1b2028,
     roughness: 0.9,
@@ -1136,35 +1670,54 @@ export function buildChapterScene(
     color: 0x646e78,
     roughness: 0.65,
   });
-  const cTorsoGeo = new THREE.BoxGeometry(0.42, 0.2, 0.72);
-  const cHeadGeo = new THREE.SphereGeometry(0.13, 10, 10);
-  const cLimbGeo = new THREE.CylinderGeometry(0.06, 0.05, 0.65, 8);
-  disposables.push(corpseCoatMat, corpseSkinMat, cTorsoGeo, cHeadGeo, cLimbGeo);
+  const cTorsoGeo = new THREE.CylinderGeometry(0.18, 0.15, 0.68, 8);
+  const cHeadGeo = new THREE.SphereGeometry(0.125, 10, 10);
+  const cLimbGeo = new THREE.CylinderGeometry(0.055, 0.044, 0.62, 8);
+  const corpseCoatParts: THREE.BufferGeometry[] = [];
+  const corpseSkinParts: THREE.BufferGeometry[] = [];
 
   for (const cp of chapter.corpses) {
     const grp = new THREE.Group();
-    const torso = new THREE.Mesh(cTorsoGeo, corpseCoatMat);
-    torso.position.set(0, 0.1, 0);
-    const head = new THREE.Mesh(cHeadGeo, corpseSkinMat);
-    head.position.set(0.04, 0.13, -0.44);
-    const leg1 = new THREE.Mesh(cLimbGeo, corpseCoatMat);
-    leg1.rotation.x = Math.PI / 2;
-    leg1.rotation.z = 0.2;
-    leg1.position.set(-0.12, 0.06, 0.58);
-    const leg2 = new THREE.Mesh(cLimbGeo, corpseCoatMat);
-    leg2.rotation.x = Math.PI / 2;
-    leg2.rotation.z = -0.15;
-    leg2.position.set(0.12, 0.06, 0.56);
-    const arm = new THREE.Mesh(cLimbGeo, corpseCoatMat);
-    arm.rotation.z = Math.PI / 2 - 0.1;
-    arm.position.set(0.36, 0.06, -0.12);
-    grp.add(torso, head, leg1, leg2, arm);
     grp.position.set(cp.x, 0, cp.z);
     grp.rotation.y = cp.rotY;
-    scene.add(grp);
-  }
+    grp.updateMatrixWorld(true);
 
-  // Partículas sutis de poeira atmosférica na luz
+    const addPart = (
+      target: THREE.BufferGeometry[],
+      geo: THREE.BufferGeometry,
+      lx: number,
+      ly: number,
+      lz: number,
+      rx = 0,
+      ry = 0,
+      rz = 0
+    ) => {
+      const local = placeGeo(geo, lx, ly, lz, rx, ry, rz);
+      local.applyMatrix4(grp.matrixWorld);
+      target.push(local);
+    };
+
+    addPart(corpseCoatParts, cTorsoGeo, 0, 0.12, 0, Math.PI / 2);
+    addPart(corpseCoatParts, cLimbGeo, -0.14, 0.06, 0.54, Math.PI / 2, 0, 0.22);
+    addPart(corpseCoatParts, cLimbGeo, 0.13, 0.07, 0.5, Math.PI / 2 - 0.12, 0, -0.16);
+    addPart(corpseCoatParts, cLimbGeo, 0.34, 0.055, -0.14, 0, 0, Math.PI / 2 - 0.1);
+    addPart(corpseSkinParts, cHeadGeo, 0.05, 0.13, -0.44);
+  }
+  if (corpseCoatParts.length > 0) {
+    const mergedCoat = mergeNormalizedGeometries(corpseCoatParts);
+    const mergedSkin = mergeNormalizedGeometries(corpseSkinParts);
+    scene.add(
+      new THREE.Mesh(mergedCoat, corpseCoatMat),
+      new THREE.Mesh(mergedSkin, corpseSkinMat)
+    );
+    disposables.push(mergedCoat, mergedSkin);
+  }
+  cTorsoGeo.dispose();
+  cHeadGeo.dispose();
+  cLimbGeo.dispose();
+  disposables.push(corpseCoatMat, corpseSkinMat);
+
+  // Poeira atmosférica + nevasca exterior (Cap. 7)
   const sporeCount = Math.max(48, Math.round(180 * particleDensity));
   const sporePositions = new Float32Array(sporeCount * 3);
   for (let i = 0; i < sporeCount; i++) {
@@ -1188,7 +1741,6 @@ export function buildChapterScene(
   scene.add(spores);
   disposables.push(sporeGeo, sporeMat);
 
-  // Nevasca exterior além da comporta norte no Capítulo 7 (Hangar)
   let snowPoints: THREE.Points | undefined;
   if (chapter.palette === "hangar") {
     const snowCount = Math.max(70, Math.round(220 * particleDensity));
@@ -1212,7 +1764,7 @@ export function buildChapterScene(
     disposables.push(snowGeo, snowMat);
   }
 
-  // Monitor CRT de vigilância CCTV escuro com granulação e flashes subliminares
+  // Monitor CRT de vigilância CCTV com suporte metálico e carcaça chanfrada
   const cctvNormalTex = buildCrtFaceTexture(false);
   const cctvSubliminalTex = buildCrtFaceTexture(true);
   const crtScreenMat = new THREE.MeshStandardMaterial({
@@ -1224,15 +1776,18 @@ export function buildChapterScene(
     roughness: 0.25,
   });
   const crtGroup = new THREE.Group();
-  const crtCaseGeo = new THREE.BoxGeometry(0.95, 0.72, 0.36);
-  const crtScreenGeo = new THREE.PlaneGeometry(0.84, 0.62);
-  const crtPoleGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.8, 8);
-  const crtCase = new THREE.Mesh(crtCaseGeo, deskMat);
+  const crtBackBase = new THREE.BoxGeometry(0.92, 0.68, 0.34);
+  const crtRimBase = new THREE.BoxGeometry(0.98, 0.74, 0.06);
+  const crtPoleBase = new THREE.CylinderGeometry(0.038, 0.044, 0.82, 8);
+  const crtCaseGeo = mergeNormalizedGeometries([
+    placeGeo(crtBackBase, 0, 0, 0),
+    placeGeo(crtRimBase, 0, 0, 0.16),
+    placeGeo(crtPoleBase, 0, 0.58, -0.04),
+  ]);
+  const crtScreenGeo = new THREE.PlaneGeometry(0.84, 0.6);
   const crtScreen = new THREE.Mesh(crtScreenGeo, crtScreenMat);
-  crtScreen.position.z = 0.19;
-  const crtPole = new THREE.Mesh(crtPoleGeo, deskMat);
-  crtPole.position.y = 0.6;
-  crtGroup.add(crtCase, crtScreen, crtPole);
+  crtScreen.position.z = 0.195;
+  crtGroup.add(new THREE.Mesh(crtCaseGeo, deskMat), crtScreen);
   crtGroup.position.set(
     chapter.crtPosition.x,
     chapter.crtPosition.y,
@@ -1240,29 +1795,51 @@ export function buildChapterScene(
   );
   crtGroup.rotation.y = chapter.crtPosition.rotY;
   scene.add(crtGroup);
-  disposables.push(crtScreenMat, crtCaseGeo, crtScreenGeo, crtPoleGeo);
+  crtBackBase.dispose();
+  crtRimBase.dispose();
+  crtPoleBase.dispose();
+  disposables.push(crtScreenMat, crtCaseGeo, crtScreenGeo);
 
   const interactables: InteractableMarker[] = [];
 
-  // 1. Kit de Estanca
+  // 1. Kit de Estanca (Maleta médica chanfrada com nervuras, fechos, alça e cruz em alto-relevo)
   const kitPickup = new THREE.Group();
-  const kitBodyGeo = new THREE.BoxGeometry(0.32, 0.13, 0.22);
-  const kitTrimGeo = new THREE.BoxGeometry(0.14, 0.14, 0.05);
+  const kitShape = createRoundedBoxShape(0.34, 0.24, 0.03);
+  const kitShellRaw = new THREE.ExtrudeGeometry(kitShape, {
+    depth: 0.11,
+    bevelEnabled: true,
+    bevelThickness: 0.015,
+    bevelSize: 0.015,
+    bevelSegments: 2,
+  });
+  kitShellRaw.rotateX(-Math.PI / 2);
+  const kitRibBase = new THREE.BoxGeometry(0.36, 0.025, 0.03);
+  const kitHandleBase = new THREE.TorusGeometry(0.045, 0.011, 6, 10, Math.PI);
+  const kitBodyGeo = mergeNormalizedGeometries([
+    placeGeo(kitShellRaw, 0, -0.055, 0),
+    placeGeo(kitRibBase, 0, 0.015, -0.06),
+    placeGeo(kitRibBase, 0, 0.015, 0.06),
+    placeGeo(kitHandleBase, 0, 0.0, 0.135, Math.PI / 2),
+  ]);
+  const kitCrossBar = new THREE.BoxGeometry(0.14, 0.025, 0.045);
+  const kitCrossGeo = mergeNormalizedGeometries([
+    placeGeo(kitCrossBar, 0, 0.068, 0),
+    placeGeo(kitCrossBar, 0, 0.068, 0, 0, Math.PI / 2),
+  ]);
   const kitBodyMat = new THREE.MeshStandardMaterial({
     color: 0xdbe2ea,
-    roughness: 0.35,
-    metalness: 0.35,
+    roughness: 0.36,
+    metalness: 0.3,
   });
   const kitCrossMat = new THREE.MeshStandardMaterial({
     color: 0x10b981,
     emissive: 0x10b981,
-    emissiveIntensity: 0.8,
+    emissiveIntensity: 0.85,
   });
-  const kitBody = new THREE.Mesh(kitBodyGeo, kitBodyMat);
-  const kitCross1 = new THREE.Mesh(kitTrimGeo, kitCrossMat);
-  const kitCross2 = new THREE.Mesh(kitTrimGeo, kitCrossMat);
-  kitCross2.rotation.y = Math.PI / 2;
-  kitPickup.add(kitBody, kitCross1, kitCross2);
+  kitPickup.add(
+    new THREE.Mesh(kitBodyGeo, kitBodyMat),
+    new THREE.Mesh(kitCrossGeo, kitCrossMat)
+  );
   kitPickup.position.set(chapter.kitPos.x, 0.12, chapter.kitPos.z);
   scene.add(kitPickup);
   interactables.push({
@@ -1273,30 +1850,33 @@ export function buildChapterScene(
     z: chapter.kitPos.z,
     mesh: kitPickup,
   });
-  disposables.push(kitBodyGeo, kitTrimGeo, kitBodyMat, kitCrossMat);
+  kitShellRaw.dispose();
+  kitRibBase.dispose();
+  kitHandleBase.dispose();
+  kitCrossBar.dispose();
+  disposables.push(kitBodyGeo, kitCrossGeo, kitBodyMat, kitCrossMat);
 
-  // 2. Cartão / Crachá do Setor
+  // 2. Cartão / Crachá do Setor com textura real de identificação + clipe metálico
   const badgePickup = new THREE.Group();
-  const badgeGeo = new THREE.BoxGeometry(0.22, 0.02, 0.32);
-  const badgeClipGeo = new THREE.CylinderGeometry(0.025, 0.025, 0.035, 10);
+  const badgeTex = buildBadgeCardTexture();
+  const badgeGeo = new THREE.BoxGeometry(0.22, 0.016, 0.32);
+  const badgeClipBase = new THREE.CylinderGeometry(0.022, 0.022, 0.03, 10);
+  const badgeRingBase = new THREE.TorusGeometry(0.026, 0.006, 6, 10);
+  const badgeClipGeo = mergeNormalizedGeometries([
+    placeGeo(badgeClipBase, 0, 0.006, -0.175),
+    placeGeo(badgeRingBase, 0, 0.01, -0.205, Math.PI / 2),
+  ]);
   const badgeMat = new THREE.MeshStandardMaterial({
-    color: 0xe2e8f0,
+    color: 0xffffff,
+    map: badgeTex,
     emissive: 0x38bdf8,
-    emissiveIntensity: 0.45,
+    emissiveIntensity: 0.25,
     roughness: 0.28,
   });
-  const badgeStripeGeo = new THREE.BoxGeometry(0.22, 0.024, 0.05);
-  const badgeStripeMat = new THREE.MeshStandardMaterial({
-    color: 0xf59e0b,
-    emissive: 0xf59e0b,
-    emissiveIntensity: 0.55,
-  });
-  const badgeCard = new THREE.Mesh(badgeGeo, badgeMat);
-  const badgeStripe = new THREE.Mesh(badgeStripeGeo, badgeStripeMat);
-  badgeStripe.position.z = -0.09;
-  const badgeClip = new THREE.Mesh(badgeClipGeo, deskMat);
-  badgeClip.position.z = -0.17;
-  badgePickup.add(badgeCard, badgeStripe, badgeClip);
+  badgePickup.add(
+    new THREE.Mesh(badgeGeo, badgeMat),
+    new THREE.Mesh(badgeClipGeo, trimSteelMat)
+  );
   badgePickup.position.set(chapter.badgePos.x, 0.1, chapter.badgePos.z);
   scene.add(badgePickup);
   interactables.push({
@@ -1307,31 +1887,108 @@ export function buildChapterScene(
     z: chapter.badgePos.z,
     mesh: badgePickup,
   });
-  disposables.push(
-    badgeGeo,
-    badgeClipGeo,
-    badgeMat,
-    badgeStripeGeo,
-    badgeStripeMat
-  );
+  badgeClipBase.dispose();
+  badgeRingBase.dispose();
+  disposables.push(badgeGeo, badgeClipGeo, badgeMat);
 
-  // 3. Armário de Aço Esconderijo (altura proporcional ao teto de 2.85m)
+  // 3. Armário Industrial de Aço (0.78m x 2.15m x 0.68m) com frente orientada para +Z local (hideX/hideZ),
+  //    4 pés elevados, venezianas 3D reais com frestas oculares, porta texturizada fosca, dobradiças e trinco com cadeado!
   const lockerGroup = new THREE.Group();
-  const lockerBodyGeo = new THREE.BoxGeometry(1.0, 2.25, 0.95);
-  const lockerDoorGeo = new THREE.BoxGeometry(0.9, 2.05, 0.06);
-  const lockerHandleGeo = new THREE.BoxGeometry(0.04, 0.24, 0.07);
-  const lockerMat = new THREE.MeshStandardMaterial({
-    color: 0x2f3a4a,
-    roughness: 0.48,
-    metalness: 0.4,
+  const lockerPbr = buildIndustrialLockerTexture(maxAniso, chapter.id, texSize);
+  const lockerInteriorMat = new THREE.MeshStandardMaterial({
+    color: 0x151d23,
+    roughness: 0.72,
+    metalness: 0.36,
+    side: THREE.DoubleSide,
   });
-  const lockerBody = new THREE.Mesh(lockerBodyGeo, lockerMat);
-  lockerBody.position.y = 1.125;
-  const lockerDoor = new THREE.Mesh(lockerDoorGeo, deskMat);
-  lockerDoor.position.set(0, 1.1, -0.48);
-  const lockerHandle = new THREE.Mesh(lockerHandleGeo, badgeStripeMat);
-  lockerHandle.position.set(-0.33, 1.1, -0.53);
-  lockerGroup.add(lockerBody, lockerDoor, lockerHandle);
+  const lockerDoorMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: lockerPbr.map,
+    normalMap: lockerPbr.normalMap,
+    normalScale: new THREE.Vector2(1.0, 1.0),
+    roughnessMap: lockerPbr.roughnessMap,
+    roughness: 0.76,
+    metalness: 0.32,
+  });
+  const lockerLatchMat = new THREE.MeshStandardMaterial({
+    color: 0x71717a,
+    roughness: 0.42,
+    metalness: 0.44,
+  });
+
+  // Gabinete metálico oco (altura 2.15m sobre pés de 0.08m, largura 0.78m, profundidade 0.68m)
+  const lBack = new THREE.BoxGeometry(0.78, 2.07, 0.03);
+  const lSide = new THREE.BoxGeometry(0.03, 2.07, 0.68);
+  const lTopBot = new THREE.BoxGeometry(0.78, 0.03, 0.68);
+  const lFoot = new THREE.BoxGeometry(0.06, 0.08, 0.06);
+  const lFrameSide = new THREE.BoxGeometry(0.055, 2.07, 0.04);
+  const lFrameH = new THREE.BoxGeometry(0.78, 0.065, 0.04);
+  const lShelf = new THREE.BoxGeometry(0.72, 0.025, 0.6);
+
+  const lockerShellGeo = mergeNormalizedGeometries([
+    placeGeo(lBack, 0, 1.115, -0.325),
+    placeGeo(lSide, -0.375, 1.115, 0),
+    placeGeo(lSide, 0.375, 1.115, 0),
+    placeGeo(lTopBot, 0, 2.135, 0),
+    placeGeo(lTopBot, 0, 0.095, 0),
+    placeGeo(lShelf, 0, 1.78, -0.02),
+    // 4 pés industriais elevados
+    placeGeo(lFoot, -0.34, 0.04, -0.29),
+    placeGeo(lFoot, 0.34, 0.04, -0.29),
+    placeGeo(lFoot, -0.34, 0.04, 0.29),
+    placeGeo(lFoot, 0.34, 0.04, 0.29),
+    // Moldura frontal recuada (+Z = frente voltada para a sala)
+    placeGeo(lFrameSide, -0.362, 1.115, 0.328),
+    placeGeo(lFrameSide, 0.362, 1.115, 0.328),
+    placeGeo(lFrameH, 0, 2.115, 0.328),
+    placeGeo(lFrameH, 0, 0.115, 0.328),
+  ]);
+
+  // Folha da porta segmentada mantendo fresta horizontal real na altura dos olhos (y = 1.26..1.38)
+  const dLower = new THREE.BoxGeometry(0.67, 1.11, 0.025);
+  const dUpper = new THREE.BoxGeometry(0.67, 0.69, 0.025);
+  const lockerDoorGeo = mergeNormalizedGeometries([
+    placeGeo(dLower, 0, 0.705, 0.338), // y: 0.15..1.26
+    placeGeo(dUpper, 0, 1.725, 0.338), // y: 1.38..2.07
+  ]);
+
+  // Venezianas horizontais 3D + frestas oculares + plaqueta numérica
+  const louverSlat = new THREE.BoxGeometry(0.46, 0.016, 0.024);
+  const tagPlate = new THREE.BoxGeometry(0.18, 0.075, 0.012);
+  const ventParts3d: THREE.BufferGeometry[] = [
+    placeGeo(tagPlate, 0, 1.5, 0.354),
+  ];
+  for (let i = 0; i < 4; i++) {
+    ventParts3d.push(
+      placeGeo(louverSlat, 0, 1.66 + i * 0.048, 0.346, 0.42),
+      placeGeo(louverSlat, 0, 0.32 + i * 0.048, 0.346, 0.42)
+    );
+  }
+  // 2 aletas finas enquadrando a fresta ocular sem obstruir visão central (y = 1.32)
+  ventParts3d.push(
+    placeGeo(louverSlat, 0, 1.265, 0.344, 0.35),
+    placeGeo(louverSlat, 0, 1.375, 0.344, 0.35)
+  );
+  const lockerVentsGeo = mergeNormalizedGeometries(ventParts3d);
+
+  // Trinco embutido + argola de cadeado + 3 dobradiças pequenas (sem puxador vertical de geladeira!)
+  const latchPlate = new THREE.BoxGeometry(0.055, 0.14, 0.018);
+  const haspLoop = new THREE.TorusGeometry(0.018, 0.005, 6, 10);
+  const hingeBarrel = new THREE.CylinderGeometry(0.014, 0.014, 0.06, 8);
+  const lockerHardwareGeo = mergeNormalizedGeometries([
+    placeGeo(latchPlate, 0.275, 1.09, 0.352),
+    placeGeo(haspLoop, 0.275, 1.08, 0.366, 0, Math.PI / 2),
+    placeGeo(hingeBarrel, -0.338, 0.38, 0.352),
+    placeGeo(hingeBarrel, -0.338, 1.12, 0.352),
+    placeGeo(hingeBarrel, -0.338, 1.88, 0.352),
+  ]);
+
+  lockerGroup.add(
+    new THREE.Mesh(lockerShellGeo, lockerInteriorMat),
+    new THREE.Mesh(lockerDoorGeo, lockerDoorMat),
+    new THREE.Mesh(lockerVentsGeo, trimSteelMat),
+    new THREE.Mesh(lockerHardwareGeo, lockerLatchMat)
+  );
   lockerGroup.position.set(chapter.lockerPos.x, 0, chapter.lockerPos.z);
   lockerGroup.rotation.y = chapter.lockerPos.rotY;
   scene.add(lockerGroup);
@@ -1343,24 +2000,111 @@ export function buildChapterScene(
     z: chapter.lockerPos.hideZ,
     mesh: lockerGroup,
   });
-  disposables.push(lockerBodyGeo, lockerDoorGeo, lockerHandleGeo, lockerMat);
 
-  // 4. Painel de Relés de Emergência
+  lBack.dispose();
+  lSide.dispose();
+  lTopBot.dispose();
+  lFoot.dispose();
+  lFrameSide.dispose();
+  lFrameH.dispose();
+  lShelf.dispose();
+  dLower.dispose();
+  dUpper.dispose();
+  louverSlat.dispose();
+  tagPlate.dispose();
+  latchPlate.dispose();
+  haspLoop.dispose();
+  hingeBarrel.dispose();
+  disposables.push(
+    lockerShellGeo,
+    lockerDoorGeo,
+    lockerVentsGeo,
+    lockerHardwareGeo,
+    lockerInteriorMat,
+    lockerDoorMat,
+    lockerLatchMat
+  );
+
+  // 4. Painel de Relés de Emergência (caixa industrial, placa gráfica, alavancas, fusíveis e cabos TubeGeometry)
   const relayGroup = new THREE.Group();
-  const relayBoxGeo = new THREE.BoxGeometry(0.88, 1.15, 0.22);
-  const relayFaceGeo = new THREE.BoxGeometry(0.74, 0.88, 0.04);
-  const relayIndGeo = new THREE.BoxGeometry(0.58, 0.1, 0.05);
+  const relayFaceTex = buildRelayFaceTexture();
+  const relayBoxBase = new THREE.BoxGeometry(0.88, 1.15, 0.22);
+  const relayLipBase = new THREE.BoxGeometry(0.94, 0.06, 0.26);
+  const relayHingeBase = new THREE.CylinderGeometry(0.018, 0.018, 0.9, 8);
+  const relayBoxGeo = mergeNormalizedGeometries([
+    placeGeo(relayBoxBase, 0, 0, 0),
+    placeGeo(relayLipBase, 0, 0.56, -0.02),
+    placeGeo(relayLipBase, 0, -0.56, -0.02),
+    placeGeo(relayHingeBase, 0.43, 0, -0.11),
+  ]);
+  const relayFaceGeo = new THREE.PlaneGeometry(0.74, 0.88);
+  const relayFaceMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: relayFaceTex,
+    roughness: 0.45,
+    metalness: 0.22,
+  });
+  const relayFace = new THREE.Mesh(relayFaceGeo, relayFaceMat);
+  relayFace.rotation.y = Math.PI; // voltado para -Z (interior da sala)
+  relayFace.position.z = -0.114;
+
+  // Alavancas de disjuntor + fusíveis + 3 cabos coloridos em curva (Ciano / Âmbar / Vermelho)
+  const toggleBase = new THREE.BoxGeometry(0.055, 0.14, 0.055);
+  const fuseBase = new THREE.CylinderGeometry(0.026, 0.026, 0.07, 8);
+  const relaySwitchGeo = mergeNormalizedGeometries([
+    placeGeo(toggleBase, -0.2, 0.05, -0.14, -0.45),
+    placeGeo(toggleBase, 0.0, 0.05, -0.14, 0.45),
+    placeGeo(toggleBase, 0.2, 0.05, -0.14, -0.45),
+    placeGeo(fuseBase, -0.18, -0.24, -0.135, Math.PI / 2),
+    placeGeo(fuseBase, 0.18, -0.24, -0.135, Math.PI / 2),
+  ]);
+
+  const cableCyanMat = new THREE.MeshStandardMaterial({
+    color: 0x06b6d4,
+    roughness: 0.35,
+  });
+  const cableAmberMat = new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    roughness: 0.35,
+  });
+  const cableRedMat = new THREE.MeshStandardMaterial({
+    color: 0xdc2626,
+    roughness: 0.35,
+  });
+  const makeCable = (xOff: number) =>
+    new THREE.TubeGeometry(
+      new THREE.CatmullRomCurve3([
+        new THREE.Vector3(xOff, -0.22, -0.12),
+        new THREE.Vector3(xOff * 0.7, -0.46, -0.18),
+        new THREE.Vector3(xOff * 0.4, -0.68, -0.1),
+      ]),
+      6,
+      0.016,
+      6,
+      false
+    );
+  const cCyanGeo = makeCable(-0.22);
+  const cAmberGeo = makeCable(0.0);
+  const cRedGeo = makeCable(0.22);
+
+  const relayIndGeo = new THREE.BoxGeometry(0.58, 0.08, 0.05);
   const relayStatusMat = new THREE.MeshStandardMaterial({
     color: 0xf59e0b,
     emissive: 0xf59e0b,
     emissiveIntensity: 1.25,
   });
-  const relayBox = new THREE.Mesh(relayBoxGeo, deskMat);
-  const relayFace = new THREE.Mesh(relayFaceGeo, wallMat);
-  relayFace.position.z = -0.12;
   const relayInd = new THREE.Mesh(relayIndGeo, relayStatusMat);
-  relayInd.position.set(0, 0.32, -0.14);
-  relayGroup.add(relayBox, relayFace, relayInd);
+  relayInd.position.set(0, 0.38, -0.135);
+
+  relayGroup.add(
+    new THREE.Mesh(relayBoxGeo, deskMat),
+    relayFace,
+    new THREE.Mesh(relaySwitchGeo, trimSteelMat),
+    new THREE.Mesh(cCyanGeo, cableCyanMat),
+    new THREE.Mesh(cAmberGeo, cableAmberMat),
+    new THREE.Mesh(cRedGeo, cableRedMat),
+    relayInd
+  );
   relayGroup.position.set(chapter.relayPos.x, 1.38, chapter.relayPos.z);
   scene.add(relayGroup);
   interactables.push({
@@ -1371,17 +2115,44 @@ export function buildChapterScene(
     z: chapter.relayPos.z - 0.35,
     mesh: relayGroup,
   });
-  disposables.push(relayBoxGeo, relayFaceGeo, relayIndGeo, relayStatusMat);
+  relayBoxBase.dispose();
+  relayLipBase.dispose();
+  relayHingeBase.dispose();
+  toggleBase.dispose();
+  fuseBase.dispose();
+  disposables.push(
+    relayBoxGeo,
+    relayFaceGeo,
+    relayFaceMat,
+    relaySwitchGeo,
+    cCyanGeo,
+    cAmberGeo,
+    cRedGeo,
+    cableCyanMat,
+    cableAmberMat,
+    cableRedMat,
+    relayIndGeo,
+    relayStatusMat
+  );
 
-  // 5. Comporta de Saída com moldura blindada proporcional (2.15m x 2.55m)
+  // 5. Comporta Blindada de Saída (pilares chanfrados, pistões hidráulicos, X-bracing, visor sujo e teclado digital)
   const exitDoorGroup = new THREE.Group();
-  const frameSideGeo = new THREE.BoxGeometry(0.32, CEIL_H, 0.38);
-  const frameTopGeo = new THREE.BoxGeometry(2.7, 0.36, 0.38);
-  const doorGeo = new THREE.BoxGeometry(2.1, 2.5, 0.22);
-  const padGeo = new THREE.BoxGeometry(0.24, 0.38, 0.1);
+  const frameSideBase = new THREE.BoxGeometry(0.32, CEIL_H, 0.38);
+  const frameTopBase = new THREE.BoxGeometry(2.74, 0.36, 0.4);
+  const pistonBase = new THREE.CylinderGeometry(0.045, 0.055, 2.2, 8);
+  const padCaseBase = new THREE.BoxGeometry(0.28, 0.42, 0.1);
+  const exitFrameGeo = mergeNormalizedGeometries([
+    placeGeo(frameSideBase, -1.2, CEIL_H * 0.5, 0),
+    placeGeo(frameSideBase, 1.2, CEIL_H * 0.5, 0),
+    placeGeo(frameTopBase, 0, CEIL_H - 0.18, 0),
+    placeGeo(pistonBase, -1.03, 1.28, -0.14),
+    placeGeo(pistonBase, 1.03, 1.28, -0.14),
+    placeGeo(padCaseBase, 1.2, 1.3, -0.2),
+  ]);
+
   const exitDoorMat = new THREE.MeshStandardMaterial({
     color: 0x1a2230,
-    roughness: 0.42,
+    roughness: 0.44,
     metalness: 0.42,
   });
   const exitDoorLightMat = new THREE.MeshStandardMaterial({
@@ -1389,21 +2160,53 @@ export function buildChapterScene(
     emissive: 0xef4444,
     emissiveIntensity: 1.5,
   });
-  const frameLeft = new THREE.Mesh(frameSideGeo, deskMat);
-  frameLeft.position.set(-1.2, CEIL_H * 0.5, 0);
-  const frameRight = new THREE.Mesh(frameSideGeo, deskMat);
-  frameRight.position.set(1.2, CEIL_H * 0.5, 0);
-  const frameTop = new THREE.Mesh(frameTopGeo, deskMat);
-  frameTop.position.set(0, CEIL_H - 0.18, 0);
-  const exitDoorMesh = new THREE.Mesh(doorGeo, exitDoorMat);
+  const keypadTex = buildKeypadPanelTexture();
+  const keypadScreenMat = new THREE.MeshStandardMaterial({
+    color: 0xffffff,
+    map: keypadTex,
+    emissive: 0x2dd4bf,
+    emissiveMap: keypadTex,
+    emissiveIntensity: 0.65,
+    roughness: 0.25,
+  });
+
+  // Folha da comporta blindada com nervuras estruturais em X + barra de travamento
+  const doorSlabBase = new THREE.BoxGeometry(2.08, 2.5, 0.2);
+  const ribDiagBase = new THREE.BoxGeometry(0.11, 2.3, 0.24);
+  const ribHBase = new THREE.BoxGeometry(1.96, 0.14, 0.26);
+  const exitDoorGeo = mergeNormalizedGeometries([
+    placeGeo(doorSlabBase, 0, 0, 0),
+    placeGeo(ribHBase, 0, 0.0, 0),
+    placeGeo(ribHBase, 0, 0.92, 0),
+    placeGeo(ribHBase, 0, -0.92, 0),
+    placeGeo(ribDiagBase, 0, 0, 0, 0, 0, 0.68),
+    placeGeo(ribDiagBase, 0, 0, 0, 0, 0, -0.68),
+  ]);
+  const exitDoorMesh = new THREE.Mesh(exitDoorGeo, exitDoorMat);
   exitDoorMesh.position.set(0, 1.25, 0);
-  const barGeo = new THREE.BoxGeometry(1.96, 0.14, 0.28);
-  const doorBar = new THREE.Mesh(barGeo, rustTrimMat);
-  doorBar.position.set(0, 0.0, 0);
-  exitDoorMesh.add(doorBar);
-  const keypadMesh = new THREE.Mesh(padGeo, exitDoorLightMat);
-  keypadMesh.position.set(1.2, 1.3, -0.22);
-  exitDoorGroup.add(frameLeft, frameRight, frameTop, exitDoorMesh, keypadMesh);
+
+  // Pequena vigia de vidro reforçado na comporta
+  const viewportGlassGeo = new THREE.PlaneGeometry(0.46, 0.22);
+  const viewportGlass = new THREE.Mesh(viewportGlassGeo, glassMat);
+  viewportGlass.rotation.y = Math.PI;
+  viewportGlass.position.set(0, 0.42, -0.115);
+  exitDoorMesh.add(viewportGlass);
+
+  const keypadScreenGeo = new THREE.PlaneGeometry(0.22, 0.34);
+  const keypadMesh = new THREE.Mesh(keypadScreenGeo, keypadScreenMat);
+  keypadMesh.rotation.y = Math.PI;
+  keypadMesh.position.set(1.2, 1.3, -0.255);
+
+  const exitLampGeo = new THREE.BoxGeometry(1.55, 0.08, 0.12);
+  const exitLamp = new THREE.Mesh(exitLampGeo, exitDoorLightMat);
+  exitLamp.position.set(0, CEIL_H - 0.38, -0.22);
+
+  exitDoorGroup.add(
+    new THREE.Mesh(exitFrameGeo, deskMat),
+    exitDoorMesh,
+    keypadMesh,
+    exitLamp
+  );
   exitDoorGroup.position.set(chapter.exitPos.x, 0, chapter.exitPos.z);
   scene.add(exitDoorGroup);
   interactables.push({
@@ -1414,26 +2217,29 @@ export function buildChapterScene(
     z: chapter.exitPos.z - 0.4,
     mesh: exitDoorGroup,
   });
-  const exitLampGeo = new THREE.BoxGeometry(1.6, 0.08, 0.14);
-  const exitLamp = new THREE.Mesh(exitLampGeo, exitDoorLightMat);
-  exitLamp.position.set(0, CEIL_H - 0.38, -0.22);
-  exitDoorGroup.add(exitLamp);
 
+  frameSideBase.dispose();
+  frameTopBase.dispose();
+  pistonBase.dispose();
+  padCaseBase.dispose();
+  doorSlabBase.dispose();
+  ribDiagBase.dispose();
+  ribHBase.dispose();
   disposables.push(
-    frameSideGeo,
-    frameTopGeo,
-    doorGeo,
-    barGeo,
-    padGeo,
+    exitFrameGeo,
+    exitDoorGeo,
+    viewportGlassGeo,
+    keypadScreenGeo,
     exitLampGeo,
     exitDoorMat,
-    exitDoorLightMat
+    exitDoorLightMat,
+    keypadScreenMat
   );
 
   // 5.1 Mapa Iluminado de Parede ("VOCÊ ESTÁ AQUI")
   const wallMapGroup = new THREE.Group();
   const wallMapTex = buildWallMapCanvasTexture(chapter);
-  const wallMapFrameGeo = new THREE.BoxGeometry(1.1, 0.85, 0.08);
+  const wallMapFrameGeo = new THREE.BoxGeometry(1.12, 0.86, 0.08);
   const wallMapScreenGeo = new THREE.PlaneGeometry(0.96, 0.72);
   const wallMapScreenMat = new THREE.MeshStandardMaterial({
     color: 0xffffff,
@@ -1470,16 +2276,23 @@ export function buildChapterScene(
     wallMapTex,
     wallMapFrameGeo,
     wallMapScreenGeo,
-    wallMapLedGeoFix(wmLedGeo),
+    wmLedGeo,
     wallMapScreenMat,
     wallMapStatusMat
   );
 
-  // 5.2 Porta de Contenção Temporária (bloqueia passagem e força desvio do Newborn)
+  // 5.2 Porta de Contenção Temporária (com nervuras blindadas + trilho superior + painel pedestal)
   const cw = chapter.containmentDoor.wall;
   const cdW = Math.max(0.25, cw.maxX - cw.minX);
   const cdD = Math.max(0.25, cw.maxZ - cw.minZ);
-  const cdGeo = new THREE.BoxGeometry(cdW, 2.55, cdD);
+  const cdSlabBase = new THREE.BoxGeometry(cdW, 2.55, cdD);
+  const cdRibBase = new THREE.BoxGeometry(cdW + 0.04, 0.12, cdD + 0.06);
+  const cdGeo = mergeNormalizedGeometries([
+    placeGeo(cdSlabBase, 0, 0, 0),
+    placeGeo(cdRibBase, 0, -0.65, 0),
+    placeGeo(cdRibBase, 0, 0.0, 0),
+    placeGeo(cdRibBase, 0, 0.65, 0),
+  ]);
   const containmentDoorMat = new THREE.MeshStandardMaterial({
     color: 0x263242,
     roughness: 0.44,
@@ -1498,9 +2311,14 @@ export function buildChapterScene(
   );
   scene.add(containmentDoorMesh);
 
-  const cdPanelGeo = new THREE.BoxGeometry(0.26, 0.42, 0.14);
+  const cdPostGeo = new THREE.BoxGeometry(0.14, 1.35, 0.12);
+  const cdPost = new THREE.Mesh(cdPostGeo, deskMat);
+  cdPost.position.set(chapter.containmentDoor.panelX, 0.675, chapter.containmentDoor.panelZ);
+  scene.add(cdPost);
+
+  const cdPanelGeo = new THREE.BoxGeometry(0.26, 0.36, 0.14);
   const cdPanel = new THREE.Mesh(cdPanelGeo, containmentPanelMat);
-  cdPanel.position.set(chapter.containmentDoor.panelX, 1.35, chapter.containmentDoor.panelZ);
+  cdPanel.position.set(chapter.containmentDoor.panelX, 1.38, chapter.containmentDoor.panelZ);
   scene.add(cdPanel);
   interactables.push({
     id: "containment_door",
@@ -1510,16 +2328,31 @@ export function buildChapterScene(
     z: chapter.containmentDoor.panelZ,
     mesh: cdPanel,
   });
-  disposables.push(cdGeo, cdPanelGeo, containmentDoorMat, containmentPanelMat);
+  cdSlabBase.dispose();
+  cdRibBase.dispose();
+  disposables.push(
+    cdGeo,
+    cdPostGeo,
+    cdPanelGeo,
+    containmentDoorMat,
+    containmentPanelMat
+  );
 
-  // 5.3 Isca Sonora (Pickup + Dispositivo ativo lançado no chão)
+  // 5.3 Isca Sonora (emissor acústico torneado com aletas e antena)
   const decoyPickup = new THREE.Group();
-  const decoyBodyGeo = new THREE.CylinderGeometry(0.08, 0.09, 0.22, 10);
-  const decoyRingGeo = new THREE.TorusGeometry(0.085, 0.018, 6, 12);
+  const decoyCoreBase = new THREE.CylinderGeometry(0.065, 0.085, 0.2, 12);
+  const decoyCapBase = new THREE.CylinderGeometry(0.04, 0.065, 0.04, 12);
+  const decoyAntBase = new THREE.CylinderGeometry(0.006, 0.008, 0.09, 6);
+  const decoyBodyGeo = mergeNormalizedGeometries([
+    placeGeo(decoyCoreBase, 0, 0, 0),
+    placeGeo(decoyCapBase, 0, 0.12, 0),
+    placeGeo(decoyAntBase, 0.025, 0.16, 0),
+  ]);
+  const decoyRingGeo = new THREE.TorusGeometry(0.082, 0.016, 6, 12);
   const decoyMat = new THREE.MeshStandardMaterial({
     color: 0x1e293b,
     roughness: 0.4,
-    metalness: 0.35,
+    metalness: 0.38,
   });
   const activeDecoyLedMat = new THREE.MeshStandardMaterial({
     color: 0x22d3ee,
@@ -1529,7 +2362,7 @@ export function buildChapterScene(
   const dBody = new THREE.Mesh(decoyBodyGeo, decoyMat);
   const dRing = new THREE.Mesh(decoyRingGeo, activeDecoyLedMat);
   dRing.rotation.x = Math.PI / 2;
-  dRing.position.y = 0.08;
+  dRing.position.y = 0.075;
   decoyPickup.add(dBody, dRing);
   decoyPickup.position.set(chapter.decoyPos.x, 0.14, chapter.decoyPos.z);
   scene.add(decoyPickup);
@@ -1545,36 +2378,89 @@ export function buildChapterScene(
   const activeDecoyGroup = decoyPickup.clone();
   activeDecoyGroup.visible = false;
   scene.add(activeDecoyGroup);
+  decoyCoreBase.dispose();
+  decoyCapBase.dispose();
+  decoyAntBase.dispose();
   disposables.push(decoyBodyGeo, decoyRingGeo, decoyMat, activeDecoyLedMat);
 
-  // 5.4 Armadilhas Sonoras no Chão (Cacos de vidro / Poças fundas)
-  const trapGlassGeo = new THREE.CircleGeometry(0.75, 10);
+  // 5.4 Armadilhas Sonoras no Chão (cacos prismáticos de vidro estilhaçado + poças fundas)
+  const shardBase = new THREE.ConeGeometry(0.065, 0.14, 3);
   const trapGlassMat = new THREE.MeshStandardMaterial({
-    color: 0x94a3b8,
-    roughness: 0.18,
-    metalness: 0.3,
+    color: 0xcbd5e1,
+    roughness: 0.14,
+    metalness: 0.28,
     transparent: true,
-    opacity: 0.45,
-    polygonOffset: true,
-    polygonOffsetFactor: -2,
-    polygonOffsetUnits: -2,
+    opacity: 0.72,
   });
-  for (const trap of chapter.soundTraps) {
-    const tm = new THREE.Mesh(
-      trapGlassGeo,
-      trap.kind === "glass" ? trapGlassMat : waterPuddleMat
-    );
-    tm.rotation.x = -Math.PI / 2;
-    tm.scale.set(trap.radius, trap.radius, 1);
-    tm.position.set(trap.x, 0.016, trap.z);
-    scene.add(tm);
-  }
-  disposables.push(trapGlassGeo, trapGlassMat);
+  const glassTrapParts: THREE.BufferGeometry[] = [];
+  const waterTrapParts: THREE.BufferGeometry[] = [];
+  const trapDiscBase = new THREE.CircleGeometry(0.75, 10);
 
-  // 5.5 2 Logs de Sobreviventes Coletáveis por Capítulo
-  const logBodyGeo = new THREE.BoxGeometry(0.24, 0.03, 0.32);
+  for (const trap of chapter.soundTraps) {
+    if (trap.kind === "glass") {
+      for (let s = 0; s < 14; s++) {
+        const ang = s * 2.39996;
+        const rad = Math.sqrt((s + 0.5) / 14) * trap.radius * 0.85;
+        glassTrapParts.push(
+          placeGeo(
+            shardBase,
+            trap.x + Math.cos(ang) * rad,
+            0.018,
+            trap.z + Math.sin(ang) * rad,
+            Math.PI * 0.48,
+            ang,
+            0.25,
+            0.7 + (s % 3) * 0.3,
+            0.9 + (s % 2) * 0.4,
+            0.25
+          )
+        );
+      }
+    } else {
+      waterTrapParts.push(
+        placeGeo(
+          trapDiscBase,
+          trap.x,
+          0.016,
+          trap.z,
+          -Math.PI / 2,
+          0,
+          0,
+          trap.radius,
+          trap.radius,
+          1
+        )
+      );
+    }
+  }
+  if (glassTrapParts.length > 0) {
+    const mergedShards = mergeNormalizedGeometries(glassTrapParts);
+    scene.add(new THREE.Mesh(mergedShards, trapGlassMat));
+    disposables.push(mergedShards);
+  }
+  if (waterTrapParts.length > 0) {
+    const mergedTrapsW = mergeNormalizedGeometries(waterTrapParts);
+    scene.add(new THREE.Mesh(mergedTrapsW, waterPuddleMat));
+    disposables.push(mergedTrapsW);
+  }
+  shardBase.dispose();
+  trapDiscBase.dispose();
+  disposables.push(trapGlassMat);
+
+  // 5.5 2 Logs de Sobreviventes Coletáveis (PADD tático com cantoneiras reforçadas e antena)
+  const logSlabBase = new THREE.BoxGeometry(0.24, 0.028, 0.32);
+  const logBumpBase = new THREE.BoxGeometry(0.26, 0.036, 0.055);
+  const logBodyGeo = mergeNormalizedGeometries([
+    placeGeo(logSlabBase, 0, 0, 0),
+    placeGeo(logBumpBase, 0, 0, -0.145),
+    placeGeo(logBumpBase, 0, 0, 0.145),
+  ]);
   const logScreenGeo = new THREE.PlaneGeometry(0.18, 0.22);
-  const logBodyMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5 });
+  const logBodyMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.48,
+    metalness: 0.3,
+  });
   const logScreenMat = new THREE.MeshStandardMaterial({
     color: 0xfde68a,
     emissive: 0xf59e0b,
@@ -1586,7 +2472,7 @@ export function buildChapterScene(
     const b = new THREE.Mesh(logBodyGeo, logBodyMat);
     const sc = new THREE.Mesh(logScreenGeo, logScreenMat);
     sc.rotation.x = -Math.PI / 2;
-    sc.position.y = 0.018;
+    sc.position.y = 0.017;
     g.add(b, sc);
     g.position.set(spec.x, 0.12, spec.z);
     scene.add(g);
@@ -1600,10 +2486,15 @@ export function buildChapterScene(
     });
     return g;
   };
-  const logPickups: [THREE.Group, THREE.Group] = [buildLogPickup(0), buildLogPickup(1)];
+  const logPickups: [THREE.Group, THREE.Group] = [
+    buildLogPickup(0),
+    buildLogPickup(1),
+  ];
+  logSlabBase.dispose();
+  logBumpBase.dispose();
   disposables.push(logBodyGeo, logScreenGeo, logBodyMat, logScreenMat);
 
-  // 5.6 Rastro de Sangue InstancedMesh (até 48 gotas quando jogador está ferido)
+  // 5.6 Rastro de Sangue InstancedMesh (até 48 gotas)
   const bloodDropGeo = new THREE.CircleGeometry(0.14, 8);
   bloodDropGeo.rotateX(-Math.PI / 2);
   const bloodDropsInst = new THREE.InstancedMesh(bloodDropGeo, bloodPuddleMat, 48);
@@ -1619,7 +2510,7 @@ export function buildChapterScene(
 
   const viewmodel = attachFirstPersonViewmodel(camera, disposables);
 
-  // Carregamento assíncrono de modelos .glb (Draco/KTX2) do pacote modular salvo no dispositivo
+  // Carregamento assíncrono opcional de `.glb` modular salvo no dispositivo
   let activeDisposed = false;
   let downloadedPropUrl: string | null = null;
   disposables.push({
@@ -1683,8 +2574,4 @@ export function buildChapterScene(
     interactables,
     disposables,
   };
-}
-
-function wallMapLedGeoFix<T>(g: T): T {
-  return g;
 }

@@ -25,6 +25,7 @@ import {
   isMobileOrTabletDevice,
   resolveCircleWallCollision,
   resolveEffectiveGraphics,
+  selectSafeNewbornSpawn,
 } from "../game/gameLogic";
 import { panicLogger } from "../game/panicLogger";
 import { buildFlashlightCookieTexture } from "../game/resourceCache";
@@ -104,6 +105,8 @@ interface VanguardCanvasProps {
   onAlertTriggered?: () => void;
   onSoundTrapTriggered?: (kind: "glass" | "puddle") => void;
   onAmbushWarning?: () => void;
+  isPanelModalOpen?: boolean;
+  onDangerClosePanel?: () => void;
   resetSignal: number;
   quickTurnSignal?: number;
   deployDecoySignal?: number;
@@ -229,6 +232,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
   onAlertTriggered,
   onSoundTrapTriggered,
   onAmbushWarning,
+  isPanelModalOpen = false,
+  onDangerClosePanel,
   resetSignal,
   quickTurnSignal = 0,
   deployDecoySignal = 0,
@@ -265,6 +270,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onAlertTriggered,
     onSoundTrapTriggered,
     onAmbushWarning,
+    isPanelModalOpen,
+    onDangerClosePanel,
   });
 
   stateRef.current = {
@@ -292,6 +299,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     onAlertTriggered,
     onSoundTrapTriggered,
     onAmbushWarning,
+    isPanelModalOpen,
+    onDangerClosePanel,
   };
 
   const simRef = useRef({
@@ -345,6 +354,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     lastBloodDropX: 0,
     lastBloodDropZ: -4.2,
     resetBloodDrops: false,
+    spawnGraceTimer: 0,
+    panelReactionGraceTimer: 0,
+    modalDangerNotified: false,
+    prevPanelModalOpen: false,
   });
 
   useEffect(() => {
@@ -369,9 +382,23 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     s.introScriptTimer = 0;
     s.ventDropped = chapter.newbornActiveFromStart;
     s.newbornState = chapter.newbornActiveFromStart ? "Patrol" : "Observe";
-    s.nx = chapter.newbornActiveFromStart ? 0 : -1.0;
+    if (chapter.newbornActiveFromStart) {
+      const safeStart = selectSafeNewbornSpawn({
+        playerX: chapter.spawn.x,
+        playerZ: chapter.spawn.z,
+        playerYaw: chapter.spawn.yaw,
+        exitPos: chapter.exitPos,
+        walls: chapter.walls,
+        candidates: [...chapter.patrolPoints, ...chapter.navNodes],
+        minDistanceM: 14.0,
+      });
+      s.nx = safeStart.x;
+      s.nz = safeStart.z;
+    } else {
+      s.nx = -1.0;
+      s.nz = 2.5;
+    }
     s.ny = 0;
-    s.nz = chapter.newbornActiveFromStart ? 9.8 : 2.5;
     s.patrolIdx = 0;
     s.huntMemoryTimer = 0;
     s.stunTimer = 0;
@@ -395,6 +422,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
     s.lastBloodDropX = chapter.spawn.x;
     s.lastBloodDropZ = chapter.spawn.z;
     s.resetBloodDrops = true;
+    s.spawnGraceTimer = chapter.newbornActiveFromStart ? 4.5 : 0;
+    s.panelReactionGraceTimer = 0;
+    s.modalDangerNotified = false;
+    s.prevPanelModalOpen = false;
   }, [resetSignal, chapter]);
 
   const clearInputsRef = useRef<(() => void) | null>(null);
@@ -406,7 +437,13 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         document.exitPointerLock?.();
       }
     }
-  }, [phase, pausedByModal]);
+    const s = simRef.current;
+    if (s.prevPanelModalOpen && !isPanelModalOpen) {
+      s.panelReactionGraceTimer = Math.max(s.panelReactionGraceTimer, 1.8);
+      s.modalDangerNotified = false;
+    }
+    s.prevPanelModalOpen = isPanelModalOpen;
+  }, [phase, pausedByModal, isPanelModalOpen]);
 
   useEffect(() => {
     if (quickTurnSignal <= 0) return;
@@ -1179,6 +1216,21 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         return;
       }
 
+      if (st.phase === "playing" && st.isPanelModalOpen) {
+        const panelDist = Math.hypot(s.nx - s.px, s.nz - s.pz);
+        if (
+          world.newborn.root.visible &&
+          s.ventDropped &&
+          panelDist <= 7.5 &&
+          !s.modalDangerNotified
+        ) {
+          s.modalDangerNotified = true;
+          s.panelReactionGraceTimer = 1.85;
+          soundEngine.playVentCreak();
+          st.onDangerClosePanel?.();
+        }
+      }
+
       if (st.phase !== "playing" || st.pausedByModal) return;
 
       world.viewmodel.root.visible = !s.hidingInLocker;
@@ -1226,6 +1278,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       s.adrenalineTimer = Math.max(0, s.adrenalineTimer - dt);
       s.hitCooldown = Math.max(0, s.hitCooldown - dt);
       s.stunTimer = Math.max(0, s.stunTimer - dt);
+      s.spawnGraceTimer = Math.max(0, s.spawnGraceTimer - dt);
+      s.panelReactionGraceTimer = Math.max(0, s.panelReactionGraceTimer - dt);
 
       // Leitura de Gamepad (analógicos + botões completos com detecção de borda)
       let gpMoveX = 0;
@@ -1487,10 +1541,10 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       s.shakeTrauma = Math.max(0, s.shakeTrauma - dt * 1.8);
 
       const camX = s.hidingInLocker
-        ? st.chapter.lockerPos.hideX
+        ? THREE.MathUtils.lerp(st.chapter.lockerPos.x, st.chapter.lockerPos.hideX, 0.42)
         : s.px - Math.cos(s.yaw) * peekDir * 0.42;
       const camZ = s.hidingInLocker
-        ? st.chapter.lockerPos.hideZ
+        ? THREE.MathUtils.lerp(st.chapter.lockerPos.z, st.chapter.lockerPos.hideZ, 0.42)
         : s.pz + Math.sin(s.yaw) * peekDir * 0.42;
 
       camera.position.x =
@@ -1507,9 +1561,11 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       camera.lookAt(_lookTarget);
       camera.rotation.z += -peekDir * 0.16;
 
-      // Lanterna segura para ARM Mali + aviso visual sutil de emboscada do Diretor
+      // Lanterna segura para ARM Mali + aviso visual sutil de emboscada/queda de duto
+      const flickerActive =
+        s.ambushFlickerWarning || s.spawnGraceTimer > 3.1;
       const flickerDip =
-        s.ambushFlickerWarning &&
+        flickerActive &&
         !st.photosensitiveMode &&
         Math.sin(elapsed * 32) > 0.25
           ? 1.15
@@ -1599,15 +1655,26 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
       } else {
         if (!s.ventDropped) {
           s.ventDropped = true;
-          s.nx = 0;
+          const safeDrop = selectSafeNewbornSpawn({
+            playerX: s.px,
+            playerZ: s.pz,
+            playerYaw: s.yaw,
+            exitPos: ch.exitPos,
+            walls: effectiveWalls,
+            candidates: [...ch.patrolPoints, ...ch.navNodes],
+            minDistanceM: 14.0,
+          });
+          s.nx = safeDrop.x;
           s.ny = 0;
-          s.nz = 8.2;
+          s.nz = safeDrop.z;
+          s.spawnGraceTimer = 4.5;
           s.newbornState = "Investigate";
-          s.investigateX = 3.2;
-          s.investigateZ = 11.4;
+          // Investiga direção aproximada sem teleporte nem colisão imediata com a saída
+          s.investigateX = s.px;
+          s.investigateZ = s.pz;
           s.directorWavePhase = "pressure";
           s.directorWaveTimer = 0;
-          soundEngine.playHurt();
+          soundEngine.playVentCreak();
           st.onNewbornVentTriggered();
         }
 
@@ -1627,14 +1694,24 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           s.ambushWarningFired = false;
           soundEngine.playVentCreak();
         } else if (dirRes.event === "drop_from_vent") {
-          s.nx = 0;
-          s.nz = 8.2;
+          const safeDrop = selectSafeNewbornSpawn({
+            playerX: s.px,
+            playerZ: s.pz,
+            playerYaw: s.yaw,
+            exitPos: ch.exitPos,
+            walls: effectiveWalls,
+            candidates: [...ch.patrolPoints, ...ch.navNodes],
+            minDistanceM: 14.0,
+          });
+          s.nx = safeDrop.x;
+          s.nz = safeDrop.z;
           s.ny = 0;
+          s.spawnGraceTimer = 4.5;
           s.newbornState = "Investigate";
           s.investigateX = s.px;
           s.investigateZ = s.pz;
           s.ambushFlickerWarning = false;
-          soundEngine.playHurt();
+          soundEngine.playVentCreak();
           st.onAlertTriggered?.();
         }
 
@@ -1670,6 +1747,7 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
             breathHeld: s.holdingBreath,
             playerBleeding: st.health === "vermelho",
             stunTimerSec: s.stunTimer,
+            spawnGraceSec: s.spawnGraceTimer,
             currentState: s.newbornState,
             sightRangeMult: diffCfg.sightRangeMult,
           });
@@ -1796,6 +1874,8 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
           if (
             !s.hidingInLocker &&
             s.stunTimer <= 0 &&
+            s.spawnGraceTimer <= 0 &&
+            s.panelReactionGraceTimer <= 0 &&
             s.hitCooldown <= 0 &&
             Math.hypot(s.nx - s.px, s.nz - s.pz) < 1.15
           ) {
@@ -2028,6 +2108,24 @@ export const VanguardCanvas: React.FC<VanguardCanvasProps> = ({
         } else {
           renderer.render(scene, camera);
         }
+        const s = simRef.current;
+        (window as Window & { __VANGUARD_DEBUG__?: unknown }).__VANGUARD_DEBUG__ = {
+          chapterId: stateRef.current.chapter.id,
+          drawCalls: renderer.info.render.calls,
+          triangles: renderer.info.render.triangles,
+          geometries: renderer.info.memory.geometries,
+          textures: renderer.info.memory.textures,
+          playerX: s.px,
+          playerZ: s.pz,
+          newbornX: s.nx,
+          newbornZ: s.nz,
+          newbornDist: Math.hypot(s.nx - s.px, s.nz - s.pz),
+          newbornState: s.newbornState,
+          ventDropped: s.ventDropped,
+          spawnGraceSec: s.spawnGraceTimer,
+          panelReactionGraceSec: s.panelReactionGraceTimer,
+          hidingInLocker: s.hidingInLocker,
+        };
       }
 
       if (isSoftwareGl) {

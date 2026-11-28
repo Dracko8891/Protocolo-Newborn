@@ -85,6 +85,11 @@ const textureCache: {
   grimyGlass?: THREE.CanvasTexture;
   cctvNormal?: THREE.CanvasTexture;
   cctvSubliminal?: THREE.CanvasTexture;
+  lockerPbr?: CachedPbrMaps;
+  lockerSector?: number;
+  keypadTex?: THREE.CanvasTexture;
+  badgeTex?: THREE.CanvasTexture;
+  relayFaceTex?: THREE.CanvasTexture;
   models: Map<string, GLTF>;
   status: "idle" | "preloading" | "ready";
   progressPct: number;
@@ -923,6 +928,237 @@ export function buildCrtFaceTexture(subliminal = false): THREE.CanvasTexture {
   } else {
     textureCache.cctvNormal = tex;
   }
+  return tex;
+}
+
+export function buildIndustrialLockerTexture(
+  maxAnisotropy: number,
+  sectorNum = 1,
+  texSize: 256 | 512 = 256
+): CachedPbrMaps {
+  if (textureCache.lockerPbr && textureCache.lockerSector === sectorNum) {
+    textureCache.lockerPbr.map.anisotropy = maxAnisotropy;
+    return textureCache.lockerPbr;
+  }
+  const size = 512;
+  const scale = texSize / size;
+
+  const albedo = document.createElement("canvas");
+  albedo.width = texSize;
+  albedo.height = texSize;
+  const ctx = albedo.getContext("2d")!;
+  ctx.scale(scale, scale);
+
+  const heightCanvas = document.createElement("canvas");
+  heightCanvas.width = texSize;
+  heightCanvas.height = texSize;
+  const hctx = heightCanvas.getContext("2d")!;
+  hctx.scale(scale, scale);
+
+  const roughCanvas = document.createElement("canvas");
+  roughCanvas.width = texSize;
+  roughCanvas.height = texSize;
+  const rctx = roughCanvas.getContext("2d")!;
+  rctx.scale(scale, scale);
+
+  // Chapa industrial verde-petróleo/cinza-chumbo fosca (nunca branco/cinza liso de geladeira)
+  ctx.fillStyle = "#223036";
+  ctx.fillRect(0, 0, size, size);
+  hctx.fillStyle = "#888888";
+  hctx.fillRect(0, 0, size, size);
+  rctx.fillStyle = "#bcbcbc"; // ~0.74 fosco industrial
+  rctx.fillRect(0, 0, size, size);
+
+  addWeatheredGrain(ctx, hctx, rctx, size, 73 + sectorNum);
+
+  // Escovado vertical metálico sutil + desgaste/ferrugem nas bordas e base
+  for (let x = 0; x < size; x += 6) {
+    ctx.fillStyle = x % 12 === 0 ? "rgba(255,255,255,0.025)" : "rgba(0,0,0,0.035)";
+    ctx.fillRect(x, 0, 2, size);
+  }
+  const edgeWear = ctx.createLinearGradient(0, 0, 0, size);
+  edgeWear.addColorStop(0, "rgba(56, 31, 18, 0.38)");
+  edgeWear.addColorStop(0.14, "rgba(0,0,0,0)");
+  edgeWear.addColorStop(0.84, "rgba(0,0,0,0)");
+  edgeWear.addColorStop(1, "rgba(68, 34, 18, 0.56)");
+  ctx.fillStyle = edgeWear;
+  ctx.fillRect(0, 0, size, size);
+
+  // Moldura rebaixada da porta do armário
+  ctx.strokeStyle = "#0e1418";
+  ctx.lineWidth = 10;
+  ctx.strokeRect(20, 18, size - 40, size - 36);
+  hctx.strokeStyle = "#2c2c2c";
+  hctx.lineWidth = 10;
+  hctx.strokeRect(20, 18, size - 40, size - 36);
+
+  // Venezianas horizontais desenhadas também no mapa de altura/cor
+  for (const baseY of [56, 386]) {
+    for (let s = 0; s < 5; s++) {
+      const y = baseY + s * 15;
+      ctx.fillStyle = "#070a0d";
+      ctx.fillRect(92, y, 328, 8);
+      ctx.fillStyle = "rgba(148,163,184,0.16)";
+      ctx.fillRect(92, y + 8, 328, 2);
+      hctx.fillStyle = "#181818";
+      hctx.fillRect(92, y, 328, 8);
+    }
+  }
+
+  // Porta-etiqueta metálico e número estêncil (ex: 04 / 12)
+  ctx.fillStyle = "#39464f";
+  ctx.fillRect(194, 152, 124, 50);
+  ctx.strokeStyle = "#11181e";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(194, 152, 124, 50);
+  ctx.fillStyle = "#cbd5e1";
+  ctx.font = "bold 28px monospace";
+  ctx.textAlign = "center";
+  const lockerNum = String(sectorNum * 4 + 8).padStart(2, "0");
+  ctx.fillText(lockerNum, 256, 187);
+
+  // Faixa de advertência gasta no rodapé da porta
+  ctx.fillStyle = "rgba(217, 119, 6, 0.25)";
+  ctx.fillRect(34, 466, size - 68, 12);
+
+  const map = new THREE.CanvasTexture(albedo);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = maxAnisotropy;
+
+  const normalMap = buildNormalFromHeightCanvas(heightCanvas, 2.4);
+  normalMap.anisotropy = maxAnisotropy;
+
+  const roughnessMap = new THREE.CanvasTexture(roughCanvas);
+  roughnessMap.colorSpace = THREE.NoColorSpace;
+  roughnessMap.anisotropy = maxAnisotropy;
+
+  const bundle = { map, normalMap, roughnessMap };
+  textureCache.lockerPbr = bundle;
+  textureCache.lockerSector = sectorNum;
+  return bundle;
+}
+
+export function buildKeypadPanelTexture(): THREE.CanvasTexture {
+  if (textureCache.keypadTex) return textureCache.keypadTex;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 192;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#0a1017";
+  ctx.fillRect(0, 0, 128, 192);
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(4, 4, 120, 184);
+
+  // Visor digital
+  ctx.fillStyle = "#042f2e";
+  ctx.fillRect(14, 14, 100, 32);
+  ctx.fillStyle = "#5eead4";
+  ctx.font = "bold 14px monospace";
+  ctx.textAlign = "center";
+  ctx.fillText("PIN ____", 64, 35);
+
+  // Grade 3x4 de teclas luminosas
+  const keys = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "*", "0", "#"];
+  for (let i = 0; i < 12; i++) {
+    const col = i % 3;
+    const row = Math.floor(i / 3);
+    const kx = 18 + col * 32;
+    const ky = 58 + row * 29;
+    ctx.fillStyle = "#1e293b";
+    ctx.fillRect(kx, ky, 26, 22);
+    ctx.strokeStyle = "#475569";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(kx, ky, 26, 22);
+    ctx.fillStyle = i === 11 ? "#34d399" : "#cbd5e1";
+    ctx.font = "bold 12px monospace";
+    ctx.fillText(keys[i], kx + 13, ky + 15);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  textureCache.keypadTex = tex;
+  return tex;
+}
+
+export function buildBadgeCardTexture(): THREE.CanvasTexture {
+  if (textureCache.badgeTex) return textureCache.badgeTex;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 192;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#e2e8f0";
+  ctx.fillRect(0, 0, 128, 192);
+  ctx.fillStyle = "#0f172a";
+  ctx.fillRect(0, 0, 128, 34);
+  ctx.fillStyle = "#f59e0b";
+  ctx.fillRect(0, 34, 128, 8);
+
+  // Foto de identificação + chip dourado
+  ctx.fillStyle = "#94a3b8";
+  ctx.fillRect(14, 56, 48, 60);
+  ctx.fillStyle = "#334155";
+  ctx.beginPath();
+  ctx.arc(38, 76, 12, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillRect(22, 92, 32, 20);
+
+  ctx.fillStyle = "#eab308";
+  ctx.fillRect(76, 62, 34, 24);
+  ctx.fillStyle = "#1e293b";
+  ctx.fillRect(14, 134, 100, 12);
+  ctx.fillRect(14, 154, 72, 8);
+  ctx.fillStyle = "#0284c7";
+  ctx.font = "bold 10px monospace";
+  ctx.fillText("VANGUARD-7", 14, 22);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  textureCache.badgeTex = tex;
+  return tex;
+}
+
+export function buildRelayFaceTexture(): THREE.CanvasTexture {
+  if (textureCache.relayFaceTex) return textureCache.relayFaceTex;
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d")!;
+
+  ctx.fillStyle = "#141b24";
+  ctx.fillRect(0, 0, 256, 256);
+  ctx.strokeStyle = "#334155";
+  ctx.lineWidth = 6;
+  ctx.strokeRect(8, 8, 240, 240);
+
+  // Listras de alta tensão no topo
+  for (let x = -20; x < 260; x += 24) {
+    ctx.fillStyle = "#d97706";
+    ctx.beginPath();
+    ctx.moveTo(x, 12);
+    ctx.lineTo(x + 12, 12);
+    ctx.lineTo(x + 4, 28);
+    ctx.lineTo(x - 8, 28);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  ctx.fillStyle = "#e2e8f0";
+  ctx.font = "bold 14px monospace";
+  ctx.fillText("RELÉS AUXILIARES", 24, 50);
+  ctx.fillStyle = "#38bdf8";
+  ctx.font = "bold 12px monospace";
+  ctx.fillText("P2: CIANO", 26, 94);
+  ctx.fillStyle = "#fbbf24";
+  ctx.fillText("P4: AMBAR", 148, 94);
+  ctx.fillStyle = "#ef4444";
+  ctx.fillText("CURTO: VERM.", 26, 226);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  textureCache.relayFaceTex = tex;
   return tex;
 }
 
